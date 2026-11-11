@@ -71,8 +71,9 @@ async function startServer() {
   const app = express();
   const PORT = parseInt(process.env.PORT || '3000', 10);
 
-  // Trust reverse proxies (Google Cloud Run / Load Balancer)
-  app.set('trust proxy', true);
+  // Secure proxy trust: trust only loopback and private container/cloud network hops
+  // Prevents external clients from spoofing client IP via forged X-Forwarded-For headers
+  app.set('trust proxy', ['loopback', 'linklocal', 'uniquelocal']);
 
   // Security Headers via Helmet configured for AI Studio iFrame and Canvas/Phaser graphics
   app.use(
@@ -1152,45 +1153,80 @@ async function startServer() {
     }
   });
 
-  // GET /api/admin/orders - Listado paginado de pedidos con filtro opcional de estado
+  // Máquina de estados oficial para transiciones de pedidos (Fase 2F.2)
+  const VALID_STATUSES = ['pedido_recibido', 'en_preparacion', 'enviado', 'entregado'] as const;
+  type OrderStatusType = typeof VALID_STATUSES[number];
+
+  const VALID_TRANSITIONS: Record<OrderStatusType, OrderStatusType[]> = {
+    pedido_recibido: ['en_preparacion'],
+    en_preparacion: ['enviado'],
+    enviado: ['entregado'],
+    entregado: [], // Estado terminal en esta fase
+  };
+
+  // GET /api/admin/orders - Listado parametrizado con búsqueda, rango de fechas, estado y paginación
   app.get('/api/admin/orders', requireAdmin, (req, res) => {
     try {
       const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
       const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string, 10) || 10));
       const offset = (page - 1) * limit;
-      const status = typeof req.query.status === 'string' && req.query.status.trim() ? req.query.status.trim() : null;
 
-      let total = 0;
-      let orders: any[] = [];
+      const status = typeof req.query.status === 'string' && req.query.status.trim() && req.query.status.trim() !== 'todos'
+        ? req.query.status.trim()
+        : null;
 
-      if (status && status !== 'todos') {
-        total = (db.prepare('SELECT COUNT(*) as count FROM orders WHERE status = ?').get(status) as any)?.count || 0;
-        orders = db.prepare(`
-          SELECT 
-            o.id, o.order_number, o.customer_name, o.customer_email, o.customer_phone,
-            o.customer_city, o.customer_address, o.shipping_method, o.payment_method,
-            o.subtotal, o.shipping_cost, o.discount, o.coupon_code, o.total,
-            o.status, o.is_simulated, o.created_at,
-            (SELECT COUNT(*) FROM order_items WHERE order_id = o.id) as item_count
-          FROM orders o
-          WHERE o.status = ?
-          ORDER BY datetime(o.created_at) DESC
-          LIMIT ? OFFSET ?
-        `).all(status, limit, offset);
-      } else {
-        total = (db.prepare('SELECT COUNT(*) as count FROM orders').get() as any)?.count || 0;
-        orders = db.prepare(`
-          SELECT 
-            o.id, o.order_number, o.customer_name, o.customer_email, o.customer_phone,
-            o.customer_city, o.customer_address, o.shipping_method, o.payment_method,
-            o.subtotal, o.shipping_cost, o.discount, o.coupon_code, o.total,
-            o.status, o.is_simulated, o.created_at,
-            (SELECT COUNT(*) FROM order_items WHERE order_id = o.id) as item_count
-          FROM orders o
-          ORDER BY datetime(o.created_at) DESC
-          LIMIT ? OFFSET ?
-        `).all(limit, offset);
+      const search = typeof req.query.search === 'string' && req.query.search.trim()
+        ? `%${req.query.search.trim()}%`
+        : null;
+
+      const startDate = typeof req.query.startDate === 'string' && req.query.startDate.trim()
+        ? req.query.startDate.trim()
+        : null;
+
+      const endDate = typeof req.query.endDate === 'string' && req.query.endDate.trim()
+        ? req.query.endDate.trim()
+        : null;
+
+      const whereClauses: string[] = ['1=1'];
+      const params: any[] = [];
+
+      if (status) {
+        whereClauses.push('o.status = ?');
+        params.push(status);
       }
+
+      if (search) {
+        whereClauses.push('(o.id LIKE ? OR o.order_number LIKE ? OR o.customer_name LIKE ? OR o.customer_email LIKE ?)');
+        params.push(search, search, search, search);
+      }
+
+      if (startDate) {
+        whereClauses.push('date(o.created_at) >= date(?)');
+        params.push(startDate);
+      }
+
+      if (endDate) {
+        whereClauses.push('date(o.created_at) <= date(?)');
+        params.push(endDate);
+      }
+
+      const whereSql = whereClauses.join(' AND ');
+
+      const countRow = db.prepare(`SELECT COUNT(*) as count FROM orders o WHERE ${whereSql}`).get(...params) as any;
+      const total = countRow?.count || 0;
+
+      const orders = db.prepare(`
+        SELECT 
+          o.id, o.order_number, o.customer_name, o.customer_email, o.customer_phone,
+          o.customer_city, o.customer_address, o.shipping_method, o.payment_method,
+          o.subtotal, o.shipping_cost, o.discount, o.coupon_code, o.total,
+          o.status, o.is_simulated, o.created_at,
+          (SELECT COUNT(*) FROM order_items WHERE order_id = o.id) as item_count
+        FROM orders o
+        WHERE ${whereSql}
+        ORDER BY datetime(o.created_at) DESC
+        LIMIT ? OFFSET ?
+      `).all(...params, limit, offset);
 
       const totalPages = Math.ceil(total / limit) || 1;
 
@@ -1209,14 +1245,154 @@ async function startServer() {
     }
   });
 
-  // GET /api/admin/customers - Listado paginado de clientes registrados y actividad
+  // PATCH /api/admin/orders/:id/status - Transición administrativa atómica con auditoría
+  app.patch('/api/admin/orders/:id/status', requireAdmin, (req, res) => {
+    try {
+      const { id } = req.params;
+      const { status: nextStatus, notes } = req.body;
+      const adminUser = (req as any).adminUser;
+
+      if (!nextStatus || typeof nextStatus !== 'string') {
+        return res.status(400).json({ error: 'Debes indicar el nuevo estado del pedido.' });
+      }
+
+      const cleanNewStatus = nextStatus.trim() as OrderStatusType;
+
+      if (!VALID_STATUSES.includes(cleanNewStatus)) {
+        return res.status(400).json({
+          error: `Estado inválido. Estados permitidos: ${VALID_STATUSES.join(', ')}`,
+        });
+      }
+
+      const order = db.prepare('SELECT * FROM orders WHERE id = ? OR order_number = ?').get(id, id) as any;
+      if (!order) {
+        return res.status(404).json({ error: 'Pedido no encontrado para actualizar estado.' });
+      }
+
+      const currentStatus = order.status as OrderStatusType;
+
+      // Validación estricta de la máquina de estados
+      const allowedNext = VALID_TRANSITIONS[currentStatus] || [];
+      if (!allowedNext.includes(cleanNewStatus)) {
+        return res.status(400).json({
+          error: `Transición no permitida: no se puede avanzar directamente de "${currentStatus}" a "${cleanNewStatus}". Transición válida permitida: [${allowedNext.join(', ') || 'Ninguna (Estado final)'}].`,
+        });
+      }
+
+      const historyId = `hist-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+      const nowIso = new Date().toISOString();
+
+      // Transacción atómica en SQLite: actualiza pedido y registra auditoría
+      const updateOrderAndAudit = db.transaction(() => {
+        db.prepare('UPDATE orders SET status = ? WHERE id = ?').run(cleanNewStatus, order.id);
+
+        db.prepare(`
+          INSERT INTO order_status_history (
+            id, order_id, previous_status, new_status, admin_id, admin_email, notes, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          historyId,
+          order.id,
+          currentStatus,
+          cleanNewStatus,
+          adminUser.id,
+          adminUser.email,
+          notes ? String(notes).trim() : '',
+          nowIso
+        );
+      });
+
+      updateOrderAndAudit();
+
+      console.log(`[AUDIT] Pedido ${order.order_number}: estado modificado de "${currentStatus}" a "${cleanNewStatus}" por admin ${adminUser.email}`);
+
+      return res.json({
+        success: true,
+        orderId: order.id,
+        orderNumber: order.order_number,
+        previousStatus: currentStatus,
+        status: cleanNewStatus,
+        updatedAt: nowIso,
+        auditRecordId: historyId,
+        message: `Estado de la orden ${order.order_number} actualizado con éxito a "${cleanNewStatus}".`,
+      });
+    } catch (err: any) {
+      console.error('Error updating order status:', err);
+      return res.status(500).json({ error: 'Error interno al actualizar el estado del pedido.' });
+    }
+  });
+
+  // GET /api/admin/orders/:id/history - Historial de cambios de estado para auditoría
+  app.get('/api/admin/orders/:id/history', requireAdmin, (req, res) => {
+    try {
+      const { id } = req.params;
+      const order = db.prepare('SELECT id, order_number, status, created_at FROM orders WHERE id = ? OR order_number = ?').get(id, id) as any;
+
+      if (!order) {
+        return res.status(404).json({ error: 'Pedido no encontrado para consultar historial.' });
+      }
+
+      const history = db.prepare(`
+        SELECT id, order_id, previous_status, new_status, admin_id, admin_email, notes, created_at
+        FROM order_status_history
+        WHERE order_id = ?
+        ORDER BY datetime(created_at) DESC
+      `).all(order.id);
+
+      return res.json({
+        orderNumber: order.order_number,
+        currentStatus: order.status,
+        orderCreatedAt: order.created_at,
+        history,
+      });
+    } catch (err: any) {
+      console.error('Error fetching order status history:', err);
+      return res.status(500).json({ error: 'Error al consultar historial del pedido.' });
+    }
+  });
+
+  // GET /api/admin/customers - Listado paginado de clientes con búsqueda y filtro de fechas
   app.get('/api/admin/customers', requireAdmin, (req, res) => {
     try {
       const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
       const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string, 10) || 10));
       const offset = (page - 1) * limit;
 
-      const total = (db.prepare(`SELECT COUNT(*) as count FROM users WHERE role = 'customer'`).get() as any)?.count || 0;
+      const search = typeof req.query.search === 'string' && req.query.search.trim()
+        ? `%${req.query.search.trim()}%`
+        : null;
+
+      const startDate = typeof req.query.startDate === 'string' && req.query.startDate.trim()
+        ? req.query.startDate.trim()
+        : null;
+
+      const endDate = typeof req.query.endDate === 'string' && req.query.endDate.trim()
+        ? req.query.endDate.trim()
+        : null;
+
+      const whereClauses: string[] = ["u.role = 'customer'"];
+      const params: any[] = [];
+
+      if (search) {
+        whereClauses.push('(u.name LIKE ? OR u.email LIKE ? OR u.phone LIKE ? OR u.city LIKE ?)');
+        params.push(search, search, search, search);
+      }
+
+      if (startDate) {
+        whereClauses.push('date(u.created_at) >= date(?)');
+        params.push(startDate);
+      }
+
+      if (endDate) {
+        whereClauses.push('date(u.created_at) <= date(?)');
+        params.push(endDate);
+      }
+
+      const whereSql = whereClauses.join(' AND ');
+
+      const countRow = db.prepare(`SELECT COUNT(*) as count FROM users u WHERE ${whereSql}`).get(...params) as any;
+      const total = countRow?.count || 0;
+
       const customers = db.prepare(`
         SELECT 
           u.id, u.name, u.email, u.phone, u.city, u.department, u.created_at,
@@ -1225,11 +1401,11 @@ async function startServer() {
           MAX(o.created_at) as last_order_date
         FROM users u
         LEFT JOIN orders o ON (u.id = o.user_id OR lower(u.email) = lower(o.customer_email))
-        WHERE u.role = 'customer'
+        WHERE ${whereSql}
         GROUP BY u.id
         ORDER BY datetime(u.created_at) DESC
         LIMIT ? OFFSET ?
-      `).all(limit, offset);
+      `).all(...params, limit, offset);
 
       const totalPages = Math.ceil(total / limit) || 1;
 
@@ -1248,12 +1424,12 @@ async function startServer() {
     }
   });
 
-  // GET /api/admin/coupons - Listado de cupones y métricas de redención
+  // GET /api/admin/coupons - Listado de cupones distinguiendo comerciales y BTL
   app.get('/api/admin/coupons', requireAdmin, (req, res) => {
     try {
       const coupons = db.prepare(`
         SELECT 
-          code, discount_percent, level_required, max_uses, times_used,
+          code, discount_percent, coupon_type, level_required, max_uses, times_used,
           is_active, description, user_id, session_id, created_at, expires_at
         FROM coupons
         ORDER BY datetime(created_at) DESC
@@ -1263,6 +1439,207 @@ async function startServer() {
     } catch (err: any) {
       console.error('Error fetching admin coupons:', err);
       return res.status(500).json({ error: 'Error al consultar cupones.' });
+    }
+  });
+
+  // POST /api/admin/coupons - Creación de cupón comercial por el administrador (Fase 2F.2)
+  app.post('/api/admin/coupons', requireAdmin, (req, res) => {
+    try {
+      const { code, discountPercent, maxUses, expiresAt, description, isActive } = req.body;
+
+      if (!code || typeof code !== 'string') {
+        return res.status(400).json({ error: 'El código de cupón es obligatorio.' });
+      }
+
+      const normalizedCode = code.trim().toUpperCase();
+
+      // Validación de formato de código alfanumérico seguro (3 a 25 caracteres)
+      if (!/^[A-Z0-9_-]{3,25}$/.test(normalizedCode)) {
+        return res.status(400).json({
+          error: 'Código inválido. Debe tener entre 3 y 25 caracteres alfanuméricos (letras mayúsculas, números, guiones).',
+        });
+      }
+
+      // No permitir crear cupones que colisionen con el prefijo oficial de recompensas BTL
+      if (normalizedCode.startsWith('MARIAI-') || normalizedCode.startsWith('POMPON')) {
+        return res.status(400).json({
+          error: 'Los prefijos "MARIAI-" y "POMPON" están reservados exclusivamente para las recompensas del videojuego BTL.',
+        });
+      }
+
+      // Verificar unicidad del código
+      const existing = db.prepare('SELECT code FROM coupons WHERE code = ?').get(normalizedCode);
+      if (existing) {
+        return res.status(409).json({ error: `El cupón con código "${normalizedCode}" ya existe en el sistema.` });
+      }
+
+      // Validación de porcentaje (1% a 90%)
+      const discountNum = Number(discountPercent);
+      if (isNaN(discountNum) || discountNum < 1 || discountNum > 90 || !Number.isInteger(discountNum)) {
+        return res.status(400).json({ error: 'El porcentaje de descuento debe ser un número entero entre 1% y 90%.' });
+      }
+
+      // Validación de límite de usos
+      const maxUsesNum = maxUses !== undefined && maxUses !== null ? Number(maxUses) : 9999;
+      if (isNaN(maxUsesNum) || maxUsesNum < 1) {
+        return res.status(400).json({ error: 'El límite de usos debe ser un número entero positivo mayor a cero.' });
+      }
+
+      // Validación de fecha de expiración si se provee
+      let parsedExpiresAt: string | null = null;
+      if (expiresAt && typeof expiresAt === 'string' && expiresAt.trim()) {
+        const expDate = new Date(expiresAt.trim());
+        if (isNaN(expDate.getTime())) {
+          return res.status(400).json({ error: 'Fecha de vencimiento inválida.' });
+        }
+        if (expDate.getTime() < Date.now()) {
+          return res.status(400).json({ error: 'La fecha de vencimiento debe ser posterior al momento actual.' });
+        }
+        parsedExpiresAt = expDate.toISOString();
+      }
+
+      const nowIso = new Date().toISOString();
+      const activeFlag = isActive === false || isActive === 0 ? 0 : 1;
+      const cleanDesc = description && typeof description === 'string' ? description.trim() : `Cupón Comercial ${discountNum}% OFF`;
+
+      db.prepare(`
+        INSERT INTO coupons (
+          code, discount_percent, coupon_type, level_required, max_uses, times_used,
+          expires_at, is_active, description, created_at
+        ) VALUES (?, ?, 'commercial', NULL, ?, 0, ?, ?, ?, ?)
+      `).run(
+        normalizedCode,
+        discountNum,
+        maxUsesNum,
+        parsedExpiresAt,
+        activeFlag,
+        cleanDesc,
+        nowIso
+      );
+
+      console.log(`[AUDIT] Cupón comercial "${normalizedCode}" (${discountNum}% OFF) creado exitosamente por admin`);
+
+      return res.status(201).json({
+        success: true,
+        coupon: {
+          code: normalizedCode,
+          discountPercent: discountNum,
+          couponType: 'commercial',
+          maxUses: maxUsesNum,
+          timesUsed: 0,
+          expiresAt: parsedExpiresAt,
+          isActive: activeFlag === 1,
+          description: cleanDesc,
+          createdAt: nowIso,
+        },
+        message: `Cupón comercial "${normalizedCode}" creado exitosamente.`,
+      });
+    } catch (err: any) {
+      console.error('Error creating commercial coupon:', err);
+      return res.status(500).json({ error: 'Error interno al registrar el cupón comercial.' });
+    }
+  });
+
+  // PATCH /api/admin/coupons/:code - Activar/desactivar y actualizar cupón (Fase 2F.2)
+  app.patch('/api/admin/coupons/:code', requireAdmin, (req, res) => {
+    try {
+      const { code } = req.params;
+      const { isActive, expiresAt, maxUses, description, discountPercent } = req.body;
+
+      const normalizedCode = code.trim().toUpperCase();
+      const coupon = db.prepare('SELECT * FROM coupons WHERE code = ?').get(normalizedCode) as any;
+
+      if (!coupon) {
+        return res.status(404).json({ error: `El cupón "${normalizedCode}" no fue encontrado.` });
+      }
+
+      const isBtlCoupon = coupon.coupon_type === 'btl' || normalizedCode.startsWith('MARIAI-') || normalizedCode.startsWith('POMPON');
+
+      // Regla 10: Evitar que la edición administrativa altere las reglas o porcentaje de cupones BTL ya emitidos
+      if (isBtlCoupon && discountPercent !== undefined && Number(discountPercent) !== coupon.discount_percent) {
+        return res.status(400).json({
+          error: 'No está permitido modificar el porcentaje de descuento de cupones emitidos por el videojuego BTL.',
+        });
+      }
+
+      let updatedActive = coupon.is_active;
+      if (isActive !== undefined) {
+        updatedActive = isActive ? 1 : 0;
+      }
+
+      let updatedMaxUses = coupon.max_uses;
+      if (maxUses !== undefined) {
+        const numUses = Number(maxUses);
+        if (isNaN(numUses) || numUses < 1) {
+          return res.status(400).json({ error: 'El límite de usos debe ser mayor o igual a 1.' });
+        }
+        if (numUses < coupon.times_used) {
+          return res.status(400).json({
+            error: `El límite de usos (${numUses}) no puede ser menor a los usos ya redimidos (${coupon.times_used}).`,
+          });
+        }
+        updatedMaxUses = numUses;
+      }
+
+      let updatedExpiresAt = coupon.expires_at;
+      if (expiresAt !== undefined) {
+        if (expiresAt === null || expiresAt === '') {
+          updatedExpiresAt = null;
+        } else {
+          const parsed = new Date(expiresAt);
+          if (isNaN(parsed.getTime())) {
+            return res.status(400).json({ error: 'Fecha de vencimiento no válida.' });
+          }
+          updatedExpiresAt = parsed.toISOString();
+        }
+      }
+
+      let updatedDesc = coupon.description;
+      if (description !== undefined && typeof description === 'string') {
+        updatedDesc = description.trim();
+      }
+
+      let updatedDiscount = coupon.discount_percent;
+      if (!isBtlCoupon && discountPercent !== undefined) {
+        const discNum = Number(discountPercent);
+        if (isNaN(discNum) || discNum < 1 || discNum > 90 || !Number.isInteger(discNum)) {
+          return res.status(400).json({ error: 'El porcentaje debe ser un entero entre 1% y 90%.' });
+        }
+        updatedDiscount = discNum;
+      }
+
+      db.prepare(`
+        UPDATE coupons
+        SET is_active = ?, max_uses = ?, expires_at = ?, description = ?, discount_percent = ?
+        WHERE code = ?
+      `).run(
+        updatedActive,
+        updatedMaxUses,
+        updatedExpiresAt,
+        updatedDesc,
+        updatedDiscount,
+        normalizedCode
+      );
+
+      console.log(`[AUDIT] Cupón "${normalizedCode}" actualizado: activo=${updatedActive}, max_uses=${updatedMaxUses}`);
+
+      return res.json({
+        success: true,
+        coupon: {
+          code: normalizedCode,
+          discountPercent: updatedDiscount,
+          couponType: coupon.coupon_type || 'commercial',
+          maxUses: updatedMaxUses,
+          timesUsed: coupon.times_used,
+          isActive: updatedActive === 1,
+          expiresAt: updatedExpiresAt,
+          description: updatedDesc,
+        },
+        message: `Cupón "${normalizedCode}" actualizado correctamente.`,
+      });
+    } catch (err: any) {
+      console.error('Error updating coupon:', err);
+      return res.status(500).json({ error: 'Error interno al actualizar el cupón.' });
     }
   });
 

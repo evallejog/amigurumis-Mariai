@@ -32,7 +32,13 @@ import {
   ArrowUpRight,
   TrendingUp,
   Award,
-  Filter
+  Filter,
+  Plus,
+  X,
+  Calendar,
+  History,
+  ArrowRight,
+  Check
 } from 'lucide-react';
 
 type AdminTab = 'overview' | 'orders' | 'customers' | 'coupons' | 'btl' | 'analytics' | 'ml';
@@ -88,6 +94,7 @@ interface CustomerRecord {
 interface CouponRecord {
   code: string;
   discount_percent: number;
+  coupon_type?: 'commercial' | 'btl';
   level_required?: number;
   max_uses: number;
   times_used: number;
@@ -95,6 +102,17 @@ interface CouponRecord {
   description?: string;
   created_at: string;
   expires_at?: string;
+}
+
+interface StatusHistoryRecord {
+  id: string;
+  order_id: string;
+  previous_status: string;
+  new_status: string;
+  admin_id: string;
+  admin_email: string;
+  notes?: string;
+  created_at: string;
 }
 
 interface BtlLevelStat {
@@ -105,6 +123,12 @@ interface BtlLevelStat {
   avg_score: number;
   avg_time: number;
 }
+
+const NEXT_ORDER_STATUS: Record<string, { next: string; label: string; color: string }> = {
+  pedido_recibido: { next: 'en_preparacion', label: 'Iniciar Preparación', color: 'bg-amber-600 hover:bg-amber-700 text-white' },
+  en_preparacion: { next: 'enviado', label: 'Marcar como Enviado', color: 'bg-blue-600 hover:bg-blue-700 text-white' },
+  enviado: { next: 'entregado', label: 'Confirmar Entrega', color: 'bg-emerald-600 hover:bg-emerald-700 text-white' },
+};
 
 export const AdminDashboardPage: React.FC = () => {
   const navigate = useNavigate();
@@ -125,15 +149,45 @@ export const AdminDashboardPage: React.FC = () => {
   const [orderTotalCount, setOrderTotalCount] = useState<number>(0);
   const [orderStatusFilter, setOrderStatusFilter] = useState<string>('todos');
   const [orderSearch, setOrderSearch] = useState<string>('');
+  const [orderStartDate, setOrderStartDate] = useState<string>('');
+  const [orderEndDate, setOrderEndDate] = useState<string>('');
+
+  // Status transition modal state
+  const [statusModalOrder, setStatusModalOrder] = useState<OrderRecord | null>(null);
+  const [statusModalNextStatus, setStatusModalNextStatus] = useState<string>('');
+  const [statusModalNotes, setStatusModalNotes] = useState<string>('');
+  const [isSubmittingStatus, setIsSubmittingStatus] = useState<boolean>(false);
+  const [statusActionError, setStatusActionError] = useState<string | null>(null);
+
+  // History audit modal state
+  const [historyModalOrder, setHistoryModalOrder] = useState<OrderRecord | null>(null);
+  const [historyList, setHistoryList] = useState<StatusHistoryRecord[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState<boolean>(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
 
   // Customers table state
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
   const [customerPage, setCustomerPage] = useState<number>(1);
   const [customerTotalPages, setCustomerTotalPages] = useState<number>(1);
   const [customerTotalCount, setCustomerTotalCount] = useState<number>(0);
+  const [customerSearch, setCustomerSearch] = useState<string>('');
+  const [customerStartDate, setCustomerStartDate] = useState<string>('');
+  const [customerEndDate, setCustomerEndDate] = useState<string>('');
 
   // Coupons table state
   const [coupons, setCoupons] = useState<CouponRecord[]>([]);
+  const [isCouponModalOpen, setIsCouponModalOpen] = useState<boolean>(false);
+  const [couponForm, setCouponForm] = useState({
+    code: '',
+    discountPercent: 10,
+    maxUses: 100,
+    expiresAt: '',
+    description: '',
+    isActive: true,
+  });
+  const [isSubmittingCoupon, setIsSubmittingCoupon] = useState<boolean>(false);
+  const [couponModalError, setCouponModalError] = useState<string | null>(null);
+  const [couponModalSuccess, setCouponModalSuccess] = useState<string | null>(null);
 
   // BTL Telemetry state
   const [btlSummary, setBtlSummary] = useState<any>(null);
@@ -163,13 +217,22 @@ export const AdminDashboardPage: React.FC = () => {
     }
   };
 
-  const loadOrders = async (page = orderPage, status = orderStatusFilter) => {
+  const loadOrders = async (
+    page = orderPage,
+    status = orderStatusFilter,
+    search = orderSearch,
+    startDate = orderStartDate,
+    endDate = orderEndDate
+  ) => {
     try {
       setLoadingData(true);
       const query = new URLSearchParams({
         page: page.toString(),
         limit: '10',
         ...(status !== 'todos' ? { status } : {}),
+        ...(search.trim() ? { search: search.trim() } : {}),
+        ...(startDate ? { startDate } : {}),
+        ...(endDate ? { endDate } : {}),
       });
       const res = await fetch(`/api/admin/orders?${query.toString()}`, { headers: getAuthHeaders() });
       if (!res.ok) throw new Error('Error al consultar pedidos.');
@@ -185,10 +248,22 @@ export const AdminDashboardPage: React.FC = () => {
     }
   };
 
-  const loadCustomers = async (page = customerPage) => {
+  const loadCustomers = async (
+    page = customerPage,
+    search = customerSearch,
+    startDate = customerStartDate,
+    endDate = customerEndDate
+  ) => {
     try {
       setLoadingData(true);
-      const res = await fetch(`/api/admin/customers?page=${page}&limit=10`, { headers: getAuthHeaders() });
+      const query = new URLSearchParams({
+        page: page.toString(),
+        limit: '10',
+        ...(search.trim() ? { search: search.trim() } : {}),
+        ...(startDate ? { startDate } : {}),
+        ...(endDate ? { endDate } : {}),
+      });
+      const res = await fetch(`/api/admin/customers?${query.toString()}`, { headers: getAuthHeaders() });
       if (!res.ok) throw new Error('Error al consultar clientes.');
       const data = await res.json();
       setCustomers(data.customers || []);
@@ -231,13 +306,155 @@ export const AdminDashboardPage: React.FC = () => {
     }
   };
 
+  // Order status transition handlers
+  const handleOpenStatusModal = (order: OrderRecord) => {
+    const nextConfig = NEXT_ORDER_STATUS[order.status];
+    if (!nextConfig) return;
+    setStatusModalOrder(order);
+    setStatusModalNextStatus(nextConfig.next);
+    setStatusModalNotes('');
+    setStatusActionError(null);
+  };
+
+  const confirmStatusTransition = async () => {
+    if (!statusModalOrder || !statusModalNextStatus || isSubmittingStatus) return;
+    try {
+      setIsSubmittingStatus(true);
+      setStatusActionError(null);
+      const res = await fetch(`/api/admin/orders/${statusModalOrder.id}/status`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify({
+          status: statusModalNextStatus,
+          notes: statusModalNotes.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Error al actualizar estado del pedido.');
+      }
+
+      // Close modal and refresh current orders and overview
+      setStatusModalOrder(null);
+      setStatusModalNotes('');
+      loadOrders(orderPage, orderStatusFilter, orderSearch, orderStartDate, orderEndDate);
+      loadOverview();
+    } catch (err: any) {
+      setStatusActionError(err.message);
+    } finally {
+      setIsSubmittingStatus(false);
+    }
+  };
+
+  // Audit history handler
+  const handleOpenHistoryModal = async (order: OrderRecord) => {
+    setHistoryModalOrder(order);
+    setHistoryList([]);
+    setHistoryError(null);
+    setIsLoadingHistory(true);
+    try {
+      const res = await fetch(`/api/admin/orders/${order.id}/history`, {
+        headers: getAuthHeaders(),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Error al obtener historial del pedido.');
+      }
+      setHistoryList(data.history || []);
+    } catch (err: any) {
+      setHistoryError(err.message);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+  // Toggle active/inactive for coupons
+  const handleToggleCouponActive = async (coupon: CouponRecord) => {
+    try {
+      const newStatus = coupon.is_active ? false : true;
+      const res = await fetch(`/api/admin/coupons/${coupon.code}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify({
+          isActive: newStatus,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'No se pudo actualizar el cupón.');
+        return;
+      }
+      loadCoupons();
+    } catch (err: any) {
+      alert(err.message || 'Error de conexión.');
+    }
+  };
+
+  // Create commercial coupon
+  const handleCreateCoupon = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSubmittingCoupon) return;
+    setCouponModalError(null);
+    setCouponModalSuccess(null);
+    setIsSubmittingCoupon(true);
+
+    try {
+      const res = await fetch('/api/admin/coupons', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify({
+          code: couponForm.code.trim().toUpperCase(),
+          discountPercent: Number(couponForm.discountPercent),
+          maxUses: Number(couponForm.maxUses),
+          expiresAt: couponForm.expiresAt ? new Date(couponForm.expiresAt).toISOString() : null,
+          description: couponForm.description.trim(),
+          isActive: couponForm.isActive,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Error al crear cupón.');
+      }
+
+      setCouponModalSuccess(`¡Cupón ${data.coupon.code} creado exitosamente!`);
+      setTimeout(() => {
+        setIsCouponModalOpen(false);
+        setCouponModalSuccess(null);
+        setCouponForm({
+          code: '',
+          discountPercent: 10,
+          maxUses: 100,
+          expiresAt: '',
+          description: '',
+          isActive: true,
+        });
+        loadCoupons();
+      }, 1200);
+    } catch (err: any) {
+      setCouponModalError(err.message);
+    } finally {
+      setIsSubmittingCoupon(false);
+    }
+  };
+
   // Initial load when tab changes or admin confirms auth
   useEffect(() => {
     if (!isAuthenticated || user?.role !== 'admin') return;
 
     if (activeTab === 'overview') loadOverview();
-    else if (activeTab === 'orders') loadOrders(1, orderStatusFilter);
-    else if (activeTab === 'customers') loadCustomers(1);
+    else if (activeTab === 'orders') loadOrders(1, orderStatusFilter, orderSearch, orderStartDate, orderEndDate);
+    else if (activeTab === 'customers') loadCustomers(1, customerSearch, customerStartDate, customerEndDate);
     else if (activeTab === 'coupons') loadCoupons();
     else if (activeTab === 'btl') loadBtl();
   }, [activeTab, isAuthenticated, user]);
@@ -632,29 +849,95 @@ export const AdminDashboardPage: React.FC = () => {
         {/* ------------------------------------------------------------- */}
         {activeTab === 'orders' && (
           <div className="space-y-4">
-            {/* Filter Bar */}
-            <div className="p-4 rounded-2xl liquid-glass border border-white/80 shadow-xs flex flex-wrap items-center justify-between gap-3 bg-white/70">
-              <div className="flex items-center gap-1.5 overflow-x-auto">
-                {['todos', 'pedido_recibido', 'en_preparacion', 'enviado', 'entregado'].map((st) => (
-                  <button
-                    key={st}
-                    onClick={() => {
-                      setOrderStatusFilter(st);
-                      loadOrders(1, st);
-                    }}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer capitalize ${
-                      orderStatusFilter === st
-                        ? 'bg-stone-900 text-white shadow-xs'
-                        : 'bg-stone-200/70 text-stone-700 hover:bg-stone-300/60'
-                    }`}
-                  >
-                    {st.replace('_', ' ')}
-                  </button>
-                ))}
+            {/* Filter & Search Bar */}
+            <div className="p-4 rounded-3xl liquid-glass border border-white/80 shadow-xs bg-white/80 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                  {['todos', 'pedido_recibido', 'en_preparacion', 'enviado', 'entregado'].map((st) => (
+                    <button
+                      key={st}
+                      onClick={() => {
+                        setOrderStatusFilter(st);
+                        loadOrders(1, st, orderSearch, orderStartDate, orderEndDate);
+                      }}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer capitalize ${
+                        orderStatusFilter === st
+                          ? 'bg-stone-900 text-white shadow-xs'
+                          : 'bg-stone-200/70 text-stone-700 hover:bg-stone-300/60'
+                      }`}
+                    >
+                      {st.replace('_', ' ')}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="text-xs text-stone-500 font-semibold">
+                  Mostrando {orders.length} de {orderTotalCount} pedidos
+                </div>
               </div>
 
-              <div className="text-xs text-stone-500 font-semibold">
-                Mostrando {orders.length} de {orderTotalCount} pedidos
+              {/* Parameterized Search and Date Filters */}
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-2 border-t border-stone-200/60">
+                <div className="sm:col-span-5 relative">
+                  <Search className="w-3.5 h-3.5 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={orderSearch}
+                    onChange={(e) => setOrderSearch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        loadOrders(1, orderStatusFilter, orderSearch, orderStartDate, orderEndDate);
+                      }
+                    }}
+                    placeholder="Buscar por N° pedido, cliente o email..."
+                    className="w-full pl-9 pr-3 py-2 rounded-xl bg-white/90 border border-stone-200 text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  />
+                </div>
+
+                <div className="sm:col-span-3 flex items-center gap-1.5">
+                  <span className="text-[11px] font-bold text-stone-500 shrink-0">Desde:</span>
+                  <input
+                    type="date"
+                    value={orderStartDate}
+                    onChange={(e) => setOrderStartDate(e.target.value)}
+                    className="w-full py-1.5 px-2.5 rounded-xl bg-white/90 border border-stone-200 text-xs text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  />
+                </div>
+
+                <div className="sm:col-span-3 flex items-center gap-1.5">
+                  <span className="text-[11px] font-bold text-stone-500 shrink-0">Hasta:</span>
+                  <input
+                    type="date"
+                    value={orderEndDate}
+                    onChange={(e) => setOrderEndDate(e.target.value)}
+                    className="w-full py-1.5 px-2.5 rounded-xl bg-white/90 border border-stone-200 text-xs text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  />
+                </div>
+
+                <div className="sm:col-span-1 flex items-center gap-1">
+                  <button
+                    onClick={() => loadOrders(1, orderStatusFilter, orderSearch, orderStartDate, orderEndDate)}
+                    className="w-full py-2 px-3 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs cursor-pointer transition-colors shadow-xs flex items-center justify-center"
+                    title="Aplicar filtros"
+                  >
+                    <Filter className="w-3.5 h-3.5" />
+                  </button>
+                  {(orderSearch || orderStartDate || orderEndDate || orderStatusFilter !== 'todos') && (
+                    <button
+                      onClick={() => {
+                        setOrderSearch('');
+                        setOrderStartDate('');
+                        setOrderEndDate('');
+                        setOrderStatusFilter('todos');
+                        loadOrders(1, 'todos', '', '', '');
+                      }}
+                      className="py-2 px-2.5 rounded-xl bg-stone-200 hover:bg-stone-300 text-stone-700 font-bold text-xs cursor-pointer transition-colors"
+                      title="Limpiar filtros"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -667,50 +950,91 @@ export const AdminDashboardPage: React.FC = () => {
                       <th className="py-3 px-4">N° Pedido</th>
                       <th className="py-3 px-4">Cliente</th>
                       <th className="py-3 px-4">Ciudad</th>
-                      <th className="py-3 px-4">Método Envío</th>
+                      <th className="py-3 px-4">Envío</th>
                       <th className="py-3 px-4">Cupón</th>
                       <th className="py-3 px-4">Total</th>
                       <th className="py-3 px-4">Estado</th>
                       <th className="py-3 px-4">Fecha</th>
+                      <th className="py-3 px-4 text-center">Gestión Operativa</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-stone-100">
                     {orders.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="py-8 text-center text-stone-500">
-                          No se encontraron órdenes con el filtro seleccionado.
+                        <td colSpan={9} className="py-10 text-center text-stone-500">
+                          No se encontraron órdenes con los criterios especificados.
                         </td>
                       </tr>
                     ) : (
-                      orders.map((ord) => (
-                        <tr key={ord.id} className="hover:bg-amber-50/30 transition-colors">
-                          <td className="py-3 px-4 font-bold font-mono text-amber-950">{ord.order_number}</td>
-                          <td className="py-3 px-4">
-                            <p className="font-bold text-stone-900">{ord.customer_name}</p>
-                            <p className="text-[10px] text-stone-500 truncate max-w-[150px]">{ord.customer_email}</p>
-                          </td>
-                          <td className="py-3 px-4 text-stone-700">{ord.customer_city || 'Bogotá D.C.'}</td>
-                          <td className="py-3 px-4 capitalize text-stone-600">{ord.shipping_method}</td>
-                          <td className="py-3 px-4">
-                            {ord.coupon_code ? (
-                              <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 font-mono font-bold text-[10px]">
-                                {ord.coupon_code}
+                      orders.map((ord) => {
+                        const nextConfig = NEXT_ORDER_STATUS[ord.status];
+                        return (
+                          <tr key={ord.id} className="hover:bg-amber-50/30 transition-colors">
+                            <td className="py-3 px-4 font-bold font-mono text-amber-950">{ord.order_number}</td>
+                            <td className="py-3 px-4">
+                              <p className="font-bold text-stone-900">{ord.customer_name}</p>
+                              <p className="text-[10px] text-stone-500 truncate max-w-[150px]">{ord.customer_email}</p>
+                            </td>
+                            <td className="py-3 px-4 text-stone-700">{ord.customer_city || 'Bogotá D.C.'}</td>
+                            <td className="py-3 px-4 capitalize text-stone-600">{ord.shipping_method}</td>
+                            <td className="py-3 px-4">
+                              {ord.coupon_code ? (
+                                <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 font-mono font-bold text-[10px]">
+                                  {ord.coupon_code}
+                                </span>
+                              ) : (
+                                <span className="text-stone-400 text-[10px]">—</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 font-bold text-stone-900">{formatCOP(ord.total)}</td>
+                            <td className="py-3 px-4">
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                  ord.status === 'entregado'
+                                    ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                                    : ord.status === 'enviado'
+                                    ? 'bg-blue-100 text-blue-900 border border-blue-300'
+                                    : ord.status === 'en_preparacion'
+                                    ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                                    : 'bg-stone-200 text-stone-800'
+                                }`}
+                              >
+                                {ord.status.replace('_', ' ')}
                               </span>
-                            ) : (
-                              <span className="text-stone-400 text-[10px]">—</span>
-                            )}
-                          </td>
-                          <td className="py-3 px-4 font-bold text-stone-900">{formatCOP(ord.total)}</td>
-                          <td className="py-3 px-4">
-                            <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 text-[10px] font-bold">
-                              {ord.status}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4 text-stone-500 text-[11px] whitespace-nowrap">
-                            {ord.created_at?.split('T')[0]}
-                          </td>
-                        </tr>
-                      ))
+                            </td>
+                            <td className="py-3 px-4 text-stone-500 text-[11px] whitespace-nowrap">
+                              {ord.created_at?.split('T')[0]}
+                            </td>
+                            <td className="py-3 px-4">
+                              <div className="flex items-center justify-center gap-1.5">
+                                {nextConfig ? (
+                                  <button
+                                    onClick={() => handleOpenStatusModal(ord)}
+                                    className={`py-1.5 px-2.5 rounded-xl text-[10px] font-bold cursor-pointer transition-all shadow-xs flex items-center gap-1 ${nextConfig.color}`}
+                                    title={`Avanzar a ${nextConfig.next.replace('_', ' ')}`}
+                                  >
+                                    <span>{nextConfig.label}</span>
+                                    <ArrowRight className="w-3 h-3" />
+                                  </button>
+                                ) : (
+                                  <span className="py-1 px-2 rounded-lg bg-emerald-50 text-emerald-700 text-[10px] font-bold flex items-center gap-1 border border-emerald-200">
+                                    <CheckCircle2 className="w-3 h-3" />
+                                    <span>Finalizado</span>
+                                  </span>
+                                )}
+
+                                <button
+                                  onClick={() => handleOpenHistoryModal(ord)}
+                                  className="p-1.5 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-700 text-[10px] font-bold cursor-pointer transition-colors"
+                                  title="Ver historial de auditoría"
+                                >
+                                  <History className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -721,7 +1045,7 @@ export const AdminDashboardPage: React.FC = () => {
                 <div className="p-3 border-t border-stone-200/80 flex items-center justify-between text-xs">
                   <button
                     disabled={orderPage <= 1}
-                    onClick={() => loadOrders(orderPage - 1)}
+                    onClick={() => loadOrders(orderPage - 1, orderStatusFilter, orderSearch, orderStartDate, orderEndDate)}
                     className="py-1 px-3 rounded-lg border border-stone-200 text-stone-700 hover:bg-stone-100 disabled:opacity-40 cursor-pointer flex items-center gap-1"
                   >
                     <ChevronLeft className="w-3.5 h-3.5" />
@@ -732,7 +1056,7 @@ export const AdminDashboardPage: React.FC = () => {
                   </span>
                   <button
                     disabled={orderPage >= orderTotalPages}
-                    onClick={() => loadOrders(orderPage + 1)}
+                    onClick={() => loadOrders(orderPage + 1, orderStatusFilter, orderSearch, orderStartDate, orderEndDate)}
                     className="py-1 px-3 rounded-lg border border-stone-200 text-stone-700 hover:bg-stone-100 disabled:opacity-40 cursor-pointer flex items-center gap-1"
                   >
                     <span>Siguiente</span>
@@ -749,6 +1073,78 @@ export const AdminDashboardPage: React.FC = () => {
         {/* ------------------------------------------------------------- */}
         {activeTab === 'customers' && (
           <div className="space-y-4">
+            {/* Filter Bar for Customers */}
+            <div className="p-4 rounded-3xl liquid-glass border border-white/80 shadow-xs bg-white/80 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <span className="text-xs font-bold text-stone-700">Filtros de Clientes Registrados</span>
+                <span className="text-xs text-stone-500 font-semibold">
+                  Mostrando {customers.length} de {customerTotalCount} clientes
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-2 border-t border-stone-200/60">
+                <div className="sm:col-span-5 relative">
+                  <Search className="w-3.5 h-3.5 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={customerSearch}
+                    onChange={(e) => setCustomerSearch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        loadCustomers(1, customerSearch, customerStartDate, customerEndDate);
+                      }
+                    }}
+                    placeholder="Buscar por nombre, correo, teléfono o ciudad..."
+                    className="w-full pl-9 pr-3 py-2 rounded-xl bg-white/90 border border-stone-200 text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  />
+                </div>
+
+                <div className="sm:col-span-3 flex items-center gap-1.5">
+                  <span className="text-[11px] font-bold text-stone-500 shrink-0">Desde:</span>
+                  <input
+                    type="date"
+                    value={customerStartDate}
+                    onChange={(e) => setCustomerStartDate(e.target.value)}
+                    className="w-full py-1.5 px-2.5 rounded-xl bg-white/90 border border-stone-200 text-xs text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  />
+                </div>
+
+                <div className="sm:col-span-3 flex items-center gap-1.5">
+                  <span className="text-[11px] font-bold text-stone-500 shrink-0">Hasta:</span>
+                  <input
+                    type="date"
+                    value={customerEndDate}
+                    onChange={(e) => setCustomerEndDate(e.target.value)}
+                    className="w-full py-1.5 px-2.5 rounded-xl bg-white/90 border border-stone-200 text-xs text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  />
+                </div>
+
+                <div className="sm:col-span-1 flex items-center gap-1">
+                  <button
+                    onClick={() => loadCustomers(1, customerSearch, customerStartDate, customerEndDate)}
+                    className="w-full py-2 px-3 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs cursor-pointer transition-colors shadow-xs flex items-center justify-center"
+                    title="Aplicar filtros"
+                  >
+                    <Filter className="w-3.5 h-3.5" />
+                  </button>
+                  {(customerSearch || customerStartDate || customerEndDate) && (
+                    <button
+                      onClick={() => {
+                        setCustomerSearch('');
+                        setCustomerStartDate('');
+                        setCustomerEndDate('');
+                        loadCustomers(1, '', '', '');
+                      }}
+                      className="py-2 px-2.5 rounded-xl bg-stone-200 hover:bg-stone-300 text-stone-700 font-bold text-xs cursor-pointer transition-colors"
+                      title="Limpiar filtros"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
             <div className="rounded-3xl liquid-glass border border-white/80 shadow-xs bg-white/85 overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
@@ -767,7 +1163,7 @@ export const AdminDashboardPage: React.FC = () => {
                     {customers.length === 0 ? (
                       <tr>
                         <td colSpan={7} className="py-8 text-center text-stone-500">
-                          No hay clientes registrados en la plataforma.
+                          No se encontraron clientes registrados con los filtros seleccionados.
                         </td>
                       </tr>
                     ) : (
@@ -791,7 +1187,7 @@ export const AdminDashboardPage: React.FC = () => {
                 <div className="p-3 border-t border-stone-200/80 flex items-center justify-between text-xs">
                   <button
                     disabled={customerPage <= 1}
-                    onClick={() => loadCustomers(customerPage - 1)}
+                    onClick={() => loadCustomers(customerPage - 1, customerSearch, customerStartDate, customerEndDate)}
                     className="py-1 px-3 rounded-lg border border-stone-200 text-stone-700 hover:bg-stone-100 disabled:opacity-40 cursor-pointer flex items-center gap-1"
                   >
                     <ChevronLeft className="w-3.5 h-3.5" />
@@ -802,7 +1198,7 @@ export const AdminDashboardPage: React.FC = () => {
                   </span>
                   <button
                     disabled={customerPage >= customerTotalPages}
-                    onClick={() => loadCustomers(customerPage + 1)}
+                    onClick={() => loadCustomers(customerPage + 1, customerSearch, customerStartDate, customerEndDate)}
                     className="py-1 px-3 rounded-lg border border-stone-200 text-stone-700 hover:bg-stone-100 disabled:opacity-40 cursor-pointer flex items-center gap-1"
                   >
                     <span>Siguiente</span>
@@ -819,48 +1215,102 @@ export const AdminDashboardPage: React.FC = () => {
         {/* ------------------------------------------------------------- */}
         {activeTab === 'coupons' && (
           <div className="space-y-4">
+            {/* Action Bar */}
+            <div className="p-4 rounded-3xl liquid-glass border border-white/80 shadow-xs bg-white/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-stone-900">Gestión de Cupones Comerciales & Recompensas BTL</h3>
+                <p className="text-xs text-stone-500">
+                  Los cupones BTL derivan de la superación de niveles en el minijuego de Pompón. Los cupones comerciales son creados por la administración.
+                </p>
+              </div>
+
+              <button
+                onClick={() => {
+                  setCouponModalError(null);
+                  setCouponModalSuccess(null);
+                  setIsCouponModalOpen(true);
+                }}
+                className="py-2.5 px-4 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs cursor-pointer transition-all shadow-xs flex items-center gap-2 shrink-0"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Crear Cupón Comercial</span>
+              </button>
+            </div>
+
             <div className="rounded-3xl liquid-glass border border-white/80 shadow-xs bg-white/85 overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead className="bg-stone-100/90 text-stone-600 font-bold border-b border-stone-200">
                     <tr>
                       <th className="py-3 px-4">Código</th>
+                      <th className="py-3 px-4">Tipo</th>
                       <th className="py-3 px-4">Descuento</th>
-                      <th className="py-3 px-4">Nivel BTL</th>
-                      <th className="py-3 px-4">Usos Realizados</th>
-                      <th className="py-3 px-4">Límite</th>
+                      <th className="py-3 px-4">Origen / Nivel</th>
+                      <th className="py-3 px-4">Usos / Límite</th>
+                      <th className="py-3 px-4">Vencimiento</th>
                       <th className="py-3 px-4">Estado</th>
-                      <th className="py-3 px-4">Descripción</th>
-                      <th className="py-3 px-4">Creación</th>
+                      <th className="py-3 px-4 text-center">Acción</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-stone-100">
-                    {coupons.map((c) => (
-                      <tr key={c.code} className="hover:bg-amber-50/30 transition-colors">
-                        <td className="py-3 px-4 font-mono font-bold text-amber-950">{c.code}</td>
-                        <td className="py-3 px-4">
-                          <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 font-bold text-[11px]">
-                            {c.discount_percent}% OFF
-                          </span>
-                        </td>
-                        <td className="py-3 px-4">
-                          {c.level_required ? `Nivel ${c.level_required}` : 'Público'}
-                        </td>
-                        <td className="py-3 px-4 font-bold text-stone-900">{c.times_used}</td>
-                        <td className="py-3 px-4 text-stone-500">{c.max_uses > 999 ? 'Ilimitado' : c.max_uses}</td>
-                        <td className="py-3 px-4">
-                          <span
-                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                              c.is_active ? 'bg-emerald-100 text-emerald-900' : 'bg-stone-200 text-stone-600'
-                            }`}
-                          >
-                            {c.is_active ? 'Activo' : 'Inactivo'}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 text-stone-600 max-w-[200px] truncate">{c.description}</td>
-                        <td className="py-3 px-4 text-stone-500 text-[11px]">{c.created_at?.split('T')[0]}</td>
-                      </tr>
-                    ))}
+                    {coupons.map((c) => {
+                      const isBtl = c.coupon_type === 'btl' || c.code.startsWith('MARIAI-') || c.code.startsWith('POMPON');
+                      return (
+                        <tr key={c.code} className="hover:bg-amber-50/30 transition-colors">
+                          <td className="py-3 px-4">
+                            <span className="font-mono font-bold text-stone-900 block">{c.code}</span>
+                            <span className="text-[10px] text-stone-500 truncate max-w-[180px] block">{c.description}</span>
+                          </td>
+                          <td className="py-3 px-4">
+                            {isBtl ? (
+                              <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-900 font-bold text-[10px] border border-purple-200">
+                                Recompensa BTL
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-900 font-bold text-[10px] border border-blue-200">
+                                Comercial
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 font-extrabold text-[11px]">
+                              {c.discount_percent}% OFF
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-stone-700">
+                            {c.level_required ? `Nivel 0${c.level_required}` : 'Campaña General'}
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className="font-bold text-stone-900">{c.times_used}</span>
+                            <span className="text-stone-400"> / {c.max_uses > 999 ? '∞' : c.max_uses}</span>
+                          </td>
+                          <td className="py-3 px-4 text-stone-500 text-[11px]">
+                            {c.expires_at ? c.expires_at.split('T')[0] : 'Sin vencimiento'}
+                          </td>
+                          <td className="py-3 px-4">
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                c.is_active ? 'bg-emerald-100 text-emerald-900' : 'bg-stone-200 text-stone-600'
+                              }`}
+                            >
+                              {c.is_active ? 'Activo' : 'Inactivo'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <button
+                              onClick={() => handleToggleCouponActive(c)}
+                              className={`py-1 px-2.5 rounded-lg text-[10px] font-bold cursor-pointer transition-colors ${
+                                c.is_active
+                                  ? 'bg-rose-100 hover:bg-rose-200 text-rose-800'
+                                  : 'bg-emerald-100 hover:bg-emerald-200 text-emerald-800'
+                              }`}
+                            >
+                              {c.is_active ? 'Desactivar' : 'Activar'}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1077,6 +1527,336 @@ export const AdminDashboardPage: React.FC = () => {
                   Interface: AnomalyDetectionPayload
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+        {/* ============================================================= */}
+        {/* MODAL 1: ORDER STATUS TRANSITION CONFIRMATION */}
+        {/* ============================================================= */}
+        {statusModalOrder && (
+          <div className="fixed inset-0 bg-stone-950/50 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <div className="w-full max-w-md bg-white/95 rounded-3xl border border-white/80 shadow-2xl p-6 sm:p-7 space-y-5 animate-fadeIn">
+              <div className="flex items-center justify-between pb-3 border-b border-stone-200/70">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center">
+                    <Package className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-stone-900">Actualizar Estado de Pedido</h3>
+                    <p className="text-[11px] font-mono text-amber-900 font-bold">{statusModalOrder.order_number}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setStatusModalOrder(null)}
+                  disabled={isSubmittingStatus}
+                  className="p-1 rounded-xl text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Status transition diagram */}
+              <div className="p-4 rounded-2xl bg-stone-50 border border-stone-200/80 flex items-center justify-between gap-2">
+                <div className="text-center flex-1">
+                  <span className="text-[10px] uppercase font-bold text-stone-500 block">Actual</span>
+                  <span className="px-2.5 py-1 rounded-lg bg-stone-200 text-stone-800 font-bold text-xs inline-block mt-1">
+                    {statusModalOrder.status.replace('_', ' ')}
+                  </span>
+                </div>
+                <ArrowRight className="w-4 h-4 text-amber-600 shrink-0" />
+                <div className="text-center flex-1">
+                  <span className="text-[10px] uppercase font-bold text-stone-500 block">Siguiente</span>
+                  <span className="px-2.5 py-1 rounded-lg bg-amber-600 text-white font-bold text-xs inline-block mt-1 shadow-xs">
+                    {statusModalNextStatus.replace('_', ' ')}
+                  </span>
+                </div>
+              </div>
+
+              {/* Customer summary */}
+              <div className="text-xs text-stone-600 space-y-1 bg-amber-50/50 p-3 rounded-xl border border-amber-200/40">
+                <p><strong className="text-stone-800">Cliente:</strong> {statusModalOrder.customer_name} ({statusModalOrder.customer_email})</p>
+                <p><strong className="text-stone-800">Total:</strong> {formatCOP(statusModalOrder.total)} | Envío: {statusModalOrder.shipping_method}</p>
+              </div>
+
+              {/* Optional Admin Notes */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-stone-700 block">
+                  Observaciones / Notas de Auditoría (Opcional):
+                </label>
+                <textarea
+                  value={statusModalNotes}
+                  onChange={(e) => setStatusModalNotes(e.target.value)}
+                  placeholder="Ej: Paquete empacado en taller. Guía de Servientrega #992819..."
+                  rows={3}
+                  className="w-full p-3 rounded-2xl bg-white border border-stone-200 text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                />
+              </div>
+
+              {statusActionError && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{statusActionError}</span>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setStatusModalOrder(null)}
+                  disabled={isSubmittingStatus}
+                  className="py-2 px-4 rounded-xl border border-stone-200 text-stone-700 hover:bg-stone-100 text-xs font-bold cursor-pointer transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmStatusTransition}
+                  disabled={isSubmittingStatus}
+                  className="py-2.5 px-5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold cursor-pointer transition-all shadow-md flex items-center gap-2 disabled:opacity-50"
+                >
+                  {isSubmittingStatus ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>Guardando en SQLite...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" />
+                      <span>Confirmar Transición</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ============================================================= */}
+        {/* MODAL 2: ORDER AUDIT HISTORY TIMELINE */}
+        {/* ============================================================= */}
+        {historyModalOrder && (
+          <div className="fixed inset-0 bg-stone-950/50 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <div className="w-full max-w-lg bg-white/95 rounded-3xl border border-white/80 shadow-2xl p-6 sm:p-7 space-y-4 animate-fadeIn max-h-[85vh] flex flex-col">
+              <div className="flex items-center justify-between pb-3 border-b border-stone-200/70 shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-stone-100 text-stone-800 flex items-center justify-center">
+                    <History className="w-4 h-4 text-amber-700" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-stone-900">Historial de Auditoría de Estados</h3>
+                    <p className="text-[11px] font-mono text-stone-500">Orden: <strong className="text-stone-900">{historyModalOrder.order_number}</strong></p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setHistoryModalOrder(null)}
+                  className="p-1 rounded-xl text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto pr-1 space-y-3">
+                {isLoadingHistory ? (
+                  <div className="py-12 text-center flex flex-col items-center gap-2">
+                    <div className="w-6 h-6 border-2 border-amber-600 border-t-transparent rounded-full animate-spin" />
+                    <span className="text-xs text-stone-500">Cargando registros de auditoría...</span>
+                  </div>
+                ) : historyError ? (
+                  <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs">
+                    {historyError}
+                  </div>
+                ) : historyList.length === 0 ? (
+                  <div className="py-8 text-center text-xs text-stone-500 space-y-2">
+                    <Clock className="w-8 h-8 text-stone-300 mx-auto" />
+                    <p>Este pedido aún no registra transiciones administrativas posteriores a su creación.</p>
+                    <p className="text-[10px] text-stone-400">Estado inicial: <strong className="text-stone-600">{historyModalOrder.status}</strong></p>
+                  </div>
+                ) : (
+                  <div className="space-y-3 relative before:absolute before:left-3.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-stone-200">
+                    {historyList.map((rec) => (
+                      <div key={rec.id} className="relative pl-8 text-xs">
+                        <div className="absolute left-2 top-1.5 w-3.5 h-3.5 rounded-full bg-amber-600 border-2 border-white shadow-xs" />
+                        <div className="p-3 rounded-2xl bg-stone-50 border border-stone-200/70 space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-stone-900">
+                              {rec.previous_status.replace('_', ' ')} &rarr;{' '}
+                              <span className="text-amber-800">{rec.new_status.replace('_', ' ')}</span>
+                            </span>
+                            <span className="text-[10px] text-stone-400 font-mono">
+                              {new Date(rec.created_at).toLocaleString('es-CO')}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-stone-600">
+                            Por admin: <strong className="text-stone-800 font-mono">{rec.admin_email}</strong>
+                          </p>
+                          {rec.notes && (
+                            <p className="text-[11px] text-stone-700 bg-white p-2 rounded-xl border border-stone-200/50 mt-1 italic">
+                              "{rec.notes}"
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-2 border-t border-stone-200/70 flex justify-end shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setHistoryModalOrder(null)}
+                  className="py-2 px-4 rounded-xl bg-stone-900 text-white text-xs font-bold hover:bg-stone-800 cursor-pointer transition-colors"
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ============================================================= */}
+        {/* MODAL 3: CREATE COMMERCIAL COUPON */}
+        {/* ============================================================= */}
+        {isCouponModalOpen && (
+          <div className="fixed inset-0 bg-stone-950/50 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <div className="w-full max-w-md bg-white/95 rounded-3xl border border-white/80 shadow-2xl p-6 sm:p-7 space-y-4 animate-fadeIn">
+              <div className="flex items-center justify-between pb-3 border-b border-stone-200/70">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-blue-100 text-blue-800 flex items-center justify-center">
+                    <Tag className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-stone-900">Crear Cupón Comercial</h3>
+                    <p className="text-[11px] text-stone-500">Campaña de descuentos gestionada por administración</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setIsCouponModalOpen(false)}
+                  disabled={isSubmittingCoupon}
+                  className="p-1 rounded-xl text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handleCreateCoupon} className="space-y-3.5">
+                <div>
+                  <label className="text-xs font-bold text-stone-700 block mb-1">
+                    Código de Cupón (Alfanumérico):
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={couponForm.code}
+                    onChange={(e) => setCouponForm({ ...couponForm, code: e.target.value.toUpperCase() })}
+                    placeholder="Ej: BIENVENIDA20, AMORAMISTAD"
+                    className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 font-mono text-xs uppercase text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  />
+                  <span className="text-[10px] text-stone-400 mt-0.5 block">
+                    No puede iniciar con prefijos reservados de minijuego (MARIAI-, POMPON).
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-bold text-stone-700 block mb-1">
+                      Descuento (%):
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={90}
+                      required
+                      value={couponForm.discountPercent}
+                      onChange={(e) => setCouponForm({ ...couponForm, discountPercent: parseInt(e.target.value, 10) || 10 })}
+                      className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs font-bold text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-stone-700 block mb-1">
+                      Límite de Usos:
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={99999}
+                      required
+                      value={couponForm.maxUses}
+                      onChange={(e) => setCouponForm({ ...couponForm, maxUses: parseInt(e.target.value, 10) || 100 })}
+                      className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-stone-700 block mb-1">
+                    Fecha de Expiración (Opcional):
+                  </label>
+                  <input
+                    type="date"
+                    value={couponForm.expiresAt}
+                    onChange={(e) => setCouponForm({ ...couponForm, expiresAt: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-stone-700 block mb-1">
+                    Descripción / Finalidad Comercial:
+                  </label>
+                  <input
+                    type="text"
+                    value={couponForm.description}
+                    onChange={(e) => setCouponForm({ ...couponForm, description: e.target.value })}
+                    placeholder="Ej: Descuento 15% por campaña del Día de la Madre"
+                    className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  />
+                </div>
+
+                {couponModalError && (
+                  <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{couponModalError}</span>
+                  </div>
+                )}
+
+                {couponModalSuccess && (
+                  <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>{couponModalSuccess}</span>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-end gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsCouponModalOpen(false)}
+                    disabled={isSubmittingCoupon}
+                    className="py-2 px-4 rounded-xl border border-stone-200 text-stone-700 hover:bg-stone-100 text-xs font-bold cursor-pointer transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmittingCoupon}
+                    className="py-2.5 px-5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold cursor-pointer transition-all shadow-md flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {isSubmittingCoupon ? (
+                      <>
+                        <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        <span>Guardando Cupón...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-4 h-4" />
+                        <span>Crear Cupón</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}

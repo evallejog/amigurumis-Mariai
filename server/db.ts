@@ -103,6 +103,18 @@ export function initDatabase() {
       status TEXT DEFAULT 'active',
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS order_status_history (
+      id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL,
+      previous_status TEXT NOT NULL,
+      new_status TEXT NOT NULL,
+      admin_id TEXT NOT NULL,
+      admin_email TEXT NOT NULL,
+      notes TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+    );
   `);
 
   // Ensure test-sess-1 from previous verification session is recognized
@@ -147,12 +159,26 @@ export function initDatabase() {
     db.prepare('ALTER TABLE orders ADD COLUMN is_simulated INTEGER DEFAULT 1').run();
   } catch {}
 
-  // Migrate coupons table to add user_id and session_id for unique reward tracking
+  // Migrate coupons table to add user_id, session_id and coupon_type for commercial vs BTL tracking
   try {
     db.prepare('ALTER TABLE coupons ADD COLUMN user_id TEXT').run();
   } catch {}
   try {
     db.prepare('ALTER TABLE coupons ADD COLUMN session_id TEXT').run();
+  } catch {}
+  try {
+    db.prepare("ALTER TABLE coupons ADD COLUMN coupon_type TEXT DEFAULT 'commercial'").run();
+  } catch {}
+
+  // Mark all BTL coupons as coupon_type = 'btl'
+  try {
+    db.prepare(`
+      UPDATE coupons 
+      SET coupon_type = 'btl' 
+      WHERE level_required IS NOT NULL 
+         OR code LIKE 'MARIAI-%' 
+         OR code LIKE 'POMPON%'
+    `).run();
   } catch {}
 
   // Seed default official BTL game coupons
