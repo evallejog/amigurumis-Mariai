@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { BrandLogo } from '../components/common/BrandLogo';
+import { Product } from '../types';
 import {
   LayoutDashboard,
   ShoppingBag,
@@ -35,15 +36,23 @@ import {
   Award,
   Filter,
   Plus,
+  Minus,
   X,
   Menu,
   Calendar,
   History,
   ArrowRight,
-  Check
+  Check,
+  Upload,
+  Image as ImageIcon,
+  Eye,
+  EyeOff,
+  Edit3,
+  SlidersHorizontal,
+  Ruler
 } from 'lucide-react';
 
-type AdminTab = 'overview' | 'orders' | 'customers' | 'coupons' | 'btl' | 'analytics' | 'ml';
+type AdminTab = 'overview' | 'products' | 'orders' | 'customers' | 'coupons' | 'btl' | 'analytics' | 'ml';
 
 interface OverviewData {
   totalOrders: number;
@@ -57,6 +66,10 @@ interface OverviewData {
   btlGamesPlayed: number;
   btlVictories: number;
   btlWoolCollected: number;
+  totalProducts?: number;
+  publishedProducts?: number;
+  totalInventoryUnits?: number;
+  inventoryValue?: number;
 }
 
 interface OrderRecord {
@@ -240,6 +253,58 @@ export const AdminDashboardPage: React.FC = () => {
   const [btlSummary, setBtlSummary] = useState<any>(null);
   const [btlLevelStats, setBtlLevelStats] = useState<BtlLevelStat[]>([]);
 
+  // -----------------------------------------------------------------
+  // PRODUCT MANAGEMENT STATE & HANDLERS (FASE 2F.5)
+  // -----------------------------------------------------------------
+  const [products, setProducts] = useState<Product[]>([]);
+  const [productSearch, setProductSearch] = useState<string>('');
+  const [productCategoryFilter, setProductCategoryFilter] = useState<string>('todos');
+  const [productStatusFilter, setProductStatusFilter] = useState<string>('todos');
+  const [productSort, setProductSort] = useState<string>('featured');
+  const [productMetrics, setProductMetrics] = useState<{
+    totalProducts: number;
+    published: number;
+    hidden: number;
+    outOfStock: number;
+    totalUnits: number;
+    inventoryValue: number;
+  } | null>(null);
+
+  const [isProductModalOpen, setIsProductModalOpen] = useState<boolean>(false);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState<boolean>(false);
+  const [detailProduct, setDetailProduct] = useState<Product | null>(null);
+
+  const [productForm, setProductForm] = useState({
+    name: '',
+    sku: '',
+    category: 'animales',
+    price: 18500,
+    stockUnits: 5,
+    lowStockThreshold: 2,
+    status: 'published' as 'published' | 'hidden' | 'out_of_stock',
+    shortDescription: '',
+    fullDescription: '',
+    heightCm: 20,
+    widthCm: 12,
+    depthCm: 10,
+    craftTimeHours: 6,
+    difficulty: 'Intermedia',
+    weaveType: 'Punto bajo en espiral continua',
+    materials: 'Hilo 100% algodón rústico peinado, Vellón siliconado hipoalergénico, Ojos de seguridad',
+    colors: 'Tostado, marfil',
+    careInstructions: 'Lavar a mano con agua fría y secar horizontal a la sombra.',
+    notes: '',
+    imageUrl: '/src/assets/images/hero_amigurumi_showcase_1794329731742.jpg',
+    featured: false,
+  });
+
+  const [isSubmittingProduct, setIsSubmittingProduct] = useState<boolean>(false);
+  const [productModalError, setProductModalError] = useState<string | null>(null);
+  const [productModalSuccess, setProductModalSuccess] = useState<string | null>(null);
+  const [isUploadingImage, setIsUploadingImage] = useState<boolean>(false);
+  const [quickActionId, setQuickActionId] = useState<string | null>(null);
+
   // Fetch functions with Bearer token authentication
   const getAuthHeaders = (): Record<string, string> => {
     return token ? { Authorization: `Bearer ${token}` } : {};
@@ -261,6 +326,295 @@ export const AdminDashboardPage: React.FC = () => {
       setErrorMessage(err.message || 'Error de conexión con el servidor.');
     } finally {
       setLoadingData(false);
+    }
+  };
+
+  const loadProducts = async (
+    search = productSearch,
+    category = productCategoryFilter,
+    status = productStatusFilter,
+    sort = productSort
+  ) => {
+    try {
+      setLoadingData(true);
+      setErrorMessage(null);
+      const query = new URLSearchParams({
+        ...(search.trim() ? { search: search.trim() } : {}),
+        ...(category !== 'todos' ? { category } : {}),
+        ...(status !== 'todos' ? { status } : {}),
+        ...(sort ? { sort } : {}),
+        limit: '100',
+      });
+      const res = await fetch(`/api/admin/products?${query.toString()}`, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error('Error al consultar productos del catálogo.');
+      const data = await res.json();
+      setProducts(data.products || []);
+      setProductMetrics(data.metrics || null);
+    } catch (err: any) {
+      setErrorMessage(err.message);
+    } finally {
+      setLoadingData(false);
+    }
+  };
+
+  const handleOpenCreateProduct = () => {
+    setEditingProduct(null);
+    setProductForm({
+      name: '',
+      sku: '',
+      category: 'animales',
+      price: 18500,
+      stockUnits: 5,
+      lowStockThreshold: 2,
+      status: 'published',
+      shortDescription: '',
+      fullDescription: '',
+      heightCm: 20,
+      widthCm: 12,
+      depthCm: 10,
+      craftTimeHours: 6,
+      difficulty: 'Intermedia',
+      weaveType: 'Punto bajo en espiral continua',
+      materials: 'Hilo 100% algodón rústico peinado, Vellón siliconado hipoalergénico, Ojos de seguridad',
+      colors: '',
+      careInstructions: 'Lavar a mano con agua fría y secar horizontal a la sombra.',
+      notes: '',
+      imageUrl: '/src/assets/images/hero_amigurumi_showcase_1794329731742.jpg',
+      featured: false,
+    });
+    setProductModalError(null);
+    setProductModalSuccess(null);
+    setIsProductModalOpen(true);
+  };
+
+  const handleOpenEditProduct = (prod: Product) => {
+    setEditingProduct(prod);
+    setProductForm({
+      name: prod.name,
+      sku: prod.sku || '',
+      category: prod.category || 'animales',
+      price: prod.price,
+      stockUnits: prod.stockUnits ?? 0,
+      lowStockThreshold: prod.lowStockThreshold ?? 3,
+      status: (prod.status as any) || 'published',
+      shortDescription: prod.shortDescription || '',
+      fullDescription: prod.fullDescription || '',
+      heightCm: prod.dimensions?.heightCm || 20,
+      widthCm: prod.dimensions?.widthCm || 12,
+      depthCm: prod.dimensions?.depthCm || 10,
+      craftTimeHours: prod.approxCraftTimeHours || 6,
+      difficulty: prod.difficulty || 'Intermedia',
+      weaveType: prod.weaveType || 'Punto bajo en espiral continua',
+      materials: Array.isArray(prod.materials) ? prod.materials.join(', ') : (prod.materials || ''),
+      colors: prod.colors || '',
+      careInstructions: prod.careInstructions || '',
+      notes: prod.notes || '',
+      imageUrl: prod.imageUrl || '',
+      featured: Boolean(prod.featured),
+    });
+    setProductModalError(null);
+    setProductModalSuccess(null);
+    setIsProductModalOpen(true);
+  };
+
+  const handleSaveProduct = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!productForm.name.trim()) {
+      setProductModalError('El nombre del amigurumi es obligatorio.');
+      return;
+    }
+    if (productForm.price <= 0) {
+      setProductModalError('El precio debe ser mayor a 0 COP.');
+      return;
+    }
+    if (productForm.stockUnits < 0) {
+      setProductModalError('El inventario no puede ser negativo.');
+      return;
+    }
+
+    try {
+      setIsSubmittingProduct(true);
+      setProductModalError(null);
+      setProductModalSuccess(null);
+
+      const materialsArray = productForm.materials
+        .split(',')
+        .map((m) => m.trim())
+        .filter(Boolean);
+
+      const payload = {
+        name: productForm.name.trim(),
+        sku: productForm.sku.trim() || undefined,
+        category: productForm.category,
+        price: Number(productForm.price),
+        stockUnits: Number(productForm.stockUnits),
+        lowStockThreshold: Number(productForm.lowStockThreshold),
+        status: productForm.status,
+        shortDescription: productForm.shortDescription.trim(),
+        fullDescription: productForm.fullDescription.trim(),
+        heightCm: productForm.heightCm ? Number(productForm.heightCm) : undefined,
+        widthCm: productForm.widthCm ? Number(productForm.widthCm) : undefined,
+        depthCm: productForm.depthCm ? Number(productForm.depthCm) : undefined,
+        craftTimeHours: Number(productForm.craftTimeHours),
+        difficulty: productForm.difficulty,
+        weaveType: productForm.weaveType,
+        materials: materialsArray,
+        colors: productForm.colors.trim(),
+        careInstructions: productForm.careInstructions.trim(),
+        notes: productForm.notes.trim(),
+        imageUrl: productForm.imageUrl.trim(),
+        featured: productForm.featured,
+      };
+
+      const isEdit = Boolean(editingProduct);
+      const url = isEdit ? `/api/admin/products/${editingProduct!.id}` : '/api/admin/products';
+      const method = isEdit ? 'PATCH' : 'POST';
+
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Error al guardar el amigurumi.');
+      }
+
+      setProductModalSuccess(data.message || 'Producto guardado exitosamente.');
+      window.dispatchEvent(new Event('catalog_updated'));
+      setTimeout(() => {
+        setIsProductModalOpen(false);
+        loadProducts();
+        loadOverview();
+      }, 1000);
+    } catch (err: any) {
+      setProductModalError(err.message);
+    } finally {
+      setIsSubmittingProduct(false);
+    }
+  };
+
+  const handleQuickStockChange = async (prodId: string, currentStock: number, delta: number) => {
+    const newStock = Math.max(0, currentStock + delta);
+    try {
+      setQuickActionId(prodId);
+      const res = await fetch(`/api/admin/products/${prodId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify({ stockUnits: newStock }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Error al actualizar inventario.');
+      }
+      setProducts((prev) =>
+        prev.map((p) =>
+          p.id === prodId
+            ? {
+                ...p,
+                stockUnits: newStock,
+                availability: newStock === 0 ? 'out_of_stock' : newStock <= (p.lowStockThreshold || 3) ? 'low_stock' : 'in_stock',
+                status: newStock === 0 ? 'out_of_stock' : (p.status === 'out_of_stock' ? 'published' : p.status),
+              }
+            : p
+        )
+      );
+      window.dispatchEvent(new Event('catalog_updated'));
+      loadOverview();
+    } catch (err: any) {
+      console.error(err);
+      setErrorMessage(err.message);
+    } finally {
+      setQuickActionId(null);
+    }
+  };
+
+  const handleToggleProductStatus = async (prodId: string, currentStatus?: string) => {
+    const nextStatus = currentStatus === 'published' ? 'hidden' : 'published';
+    try {
+      setQuickActionId(prodId);
+      const res = await fetch(`/api/admin/products/${prodId}/status`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify({ status: nextStatus }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Error al cambiar estado.');
+      }
+      const data = await res.json();
+      setProducts((prev) =>
+        prev.map((p) => (p.id === prodId ? { ...p, status: data.product.status, availability: data.product.availability } : p))
+      );
+      window.dispatchEvent(new Event('catalog_updated'));
+      loadOverview();
+    } catch (err: any) {
+      console.error(err);
+      setErrorMessage(err.message);
+    } finally {
+      setQuickActionId(null);
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setProductModalError('Solo se permiten imágenes JPEG, PNG o WebP.');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setProductModalError('La imagen no debe superar los 5 MB.');
+      return;
+    }
+
+    try {
+      setIsUploadingImage(true);
+      setProductModalError(null);
+
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const base64 = reader.result as string;
+          const res = await fetch('/api/admin/products/upload-image', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...getAuthHeaders(),
+            },
+            body: JSON.stringify({
+              fileData: base64,
+              fileName: file.name,
+              mimeType: file.type,
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.error || 'Error al subir imagen.');
+          }
+          setProductForm((prev) => ({ ...prev, imageUrl: data.url }));
+        } catch (err: any) {
+          setProductModalError(err.message);
+        } finally {
+          setIsUploadingImage(false);
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch (err: any) {
+      setProductModalError(err.message);
+      setIsUploadingImage(false);
     }
   };
 
@@ -541,6 +895,7 @@ export const AdminDashboardPage: React.FC = () => {
     if (!isAuthenticated || user?.role !== 'admin') return;
 
     if (activeTab === 'overview') loadOverview();
+    else if (activeTab === 'products') loadProducts();
     else if (activeTab === 'orders') loadOrders(1, orderStatusFilter, orderSearch, orderStartDate, orderEndDate);
     else if (activeTab === 'customers') loadCustomers(1, customerSearch, customerStartDate, customerEndDate);
     else if (activeTab === 'coupons') loadCoupons(1, couponTypeFilter, couponStatusFilter, couponSearch);
@@ -647,9 +1002,10 @@ export const AdminDashboardPage: React.FC = () => {
 
   const navItems: { id: AdminTab; label: string; icon: React.FC<{ className?: string }>; badge?: string }[] = [
     { id: 'overview', label: 'Resumen General', icon: LayoutDashboard },
+    { id: 'products', label: 'Catálogo de Amigurumis', icon: Package, badge: overview?.totalProducts?.toString() },
     { id: 'orders', label: 'Gestión de Pedidos', icon: ShoppingBag, badge: overview?.totalOrders?.toString() },
     { id: 'customers', label: 'Clientes Registrados', icon: Users, badge: overview?.totalCustomers?.toString() },
-    { id: 'coupons', label: 'Cupones BTL', icon: Tag, badge: overview?.totalCoupons?.toString() },
+    { id: 'coupons', label: 'Cupones & Recompensas', icon: Tag, badge: overview?.totalCoupons?.toString() },
     { id: 'btl', label: 'Videojuego Pompón', icon: Gamepad2 },
     { id: 'analytics', label: 'Data Analytics', icon: BarChart3, badge: 'Fase 3' },
     { id: 'ml', label: 'Machine Learning', icon: Cpu, badge: 'Fase 4' },
@@ -679,6 +1035,7 @@ export const AdminDashboardPage: React.FC = () => {
           <button
             onClick={() => {
               if (activeTab === 'overview') loadOverview();
+              else if (activeTab === 'products') loadProducts();
               else if (activeTab === 'orders') loadOrders();
               else if (activeTab === 'customers') loadCustomers();
               else if (activeTab === 'coupons') loadCoupons();
@@ -699,121 +1056,128 @@ export const AdminDashboardPage: React.FC = () => {
         </div>
       </header>
 
-      {/* MOBILE DRAWER NAVIGATION */}
-      {isMobileNavOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden">
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 bg-stone-900/60 backdrop-blur-xs transition-opacity animate-fadeIn"
-            onClick={() => setIsMobileNavOpen(false)}
-            aria-hidden="true"
-          />
+      {/* MOBILE DRAWER NAVIGATION (Smooth CSS Transition 300ms) */}
+      <div
+        className={`fixed inset-0 z-50 lg:hidden transition-all duration-300 ${
+          isMobileNavOpen ? 'visible pointer-events-auto' : 'invisible pointer-events-none'
+        }`}
+        aria-hidden={!isMobileNavOpen}
+      >
+        {/* Backdrop with fade transition */}
+        <div
+          className={`fixed inset-0 bg-stone-900/60 backdrop-blur-xs transition-opacity duration-300 ease-out ${
+            isMobileNavOpen ? 'opacity-100' : 'opacity-0'
+          }`}
+          onClick={() => setIsMobileNavOpen(false)}
+          aria-hidden="true"
+        />
 
-          {/* Drawer Sheet */}
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="Menú de navegación del panel administrativo"
-            className="fixed inset-y-0 left-0 w-72 max-w-[85vw] bg-white p-5 shadow-2xl flex flex-col justify-between overflow-y-auto z-50"
-          >
-            <div>
-              {/* Header inside drawer */}
-              <div className="flex items-center justify-between pb-4 mb-4 border-b border-stone-200/60">
-                <div>
-                  <BrandLogo size="sm" />
-                  <div className="flex items-center gap-1.5 mt-1.5">
-                    <ShieldCheck className="w-4 h-4 text-amber-700 shrink-0" />
-                    <span className="text-xs font-extrabold uppercase tracking-wider text-amber-950 font-sans">
-                      Panel Administrativo
-                    </span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsMobileNavOpen(false)}
-                  aria-label="Cerrar menú"
-                  className="p-2 text-stone-500 hover:text-stone-900 hover:bg-stone-100 rounded-xl transition-colors cursor-pointer"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              {/* Navigation Links */}
-              <nav className="space-y-1">
-                {navItems.map((item) => {
-                  const Icon = item.icon;
-                  const isActive = activeTab === item.id;
-                  return (
-                    <button
-                      key={item.id}
-                      onClick={() => {
-                        setActiveTab(item.id);
-                        setIsMobileNavOpen(false);
-                      }}
-                      className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold font-sans transition-all cursor-pointer ${
-                        isActive
-                          ? 'bg-stone-900 text-white shadow-xs'
-                          : 'text-stone-600 hover:text-stone-950 hover:bg-stone-100/70'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <Icon className={`w-4 h-4 ${isActive ? 'text-amber-400' : 'text-stone-500'}`} />
-                        <span>{item.label}</span>
-                      </div>
-                      {item.badge && (
-                        <span
-                          className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
-                            isActive
-                              ? 'bg-white/20 text-white'
-                              : 'bg-stone-200 text-stone-700'
-                          }`}
-                        >
-                          {item.badge}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </nav>
-            </div>
-
-            {/* User Footer inside drawer */}
-            <div className="pt-4 border-t border-stone-200/60 space-y-2 mt-6">
-              <div className="p-2.5 rounded-xl bg-stone-100/80 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-stone-900 truncate max-w-[120px]">{user?.fullName}</span>
-                  <span className="px-1.5 py-0.5 rounded-md bg-amber-200/80 text-amber-950 font-extrabold text-[9px]">
-                    ADMIN
+        {/* Drawer Sheet with slide transition & accessibility */}
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Menú de navegación del panel administrativo"
+          className={`fixed inset-y-0 left-0 w-72 max-w-[85vw] bg-white p-5 shadow-2xl flex flex-col justify-between overflow-y-auto z-50 transition-transform duration-300 ease-out motion-reduce:transition-none ${
+            isMobileNavOpen ? 'translate-x-0' : '-translate-x-full'
+          }`}
+        >
+          <div>
+            {/* Header inside drawer */}
+            <div className="flex items-center justify-between pb-4 mb-4 border-b border-stone-200/60">
+              <div>
+                <BrandLogo size="sm" />
+                <div className="flex items-center gap-1.5 mt-1.5">
+                  <ShieldCheck className="w-4 h-4 text-amber-700 shrink-0" />
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-amber-950 font-sans">
+                    Panel Administrativo
                   </span>
                 </div>
-                <p className="text-[10px] text-stone-500 truncate mt-0.5">{user?.email}</p>
               </div>
-
               <button
-                onClick={() => {
-                  setIsMobileNavOpen(false);
-                  navigate('/');
-                }}
-                className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl border border-stone-200 text-stone-700 hover:text-stone-950 hover:bg-white text-xs font-bold transition-colors cursor-pointer"
+                type="button"
+                onClick={() => setIsMobileNavOpen(false)}
+                aria-label="Cerrar menú"
+                className="p-2 text-stone-500 hover:text-stone-900 hover:bg-stone-100 rounded-xl transition-colors cursor-pointer"
               >
-                <ArrowLeft className="w-3.5 h-3.5 text-stone-500" />
-                <span>Volver a la Tienda</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  setIsMobileNavOpen(false);
-                  logout();
-                }}
-                className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-rose-600 hover:bg-rose-50 text-xs font-semibold transition-colors cursor-pointer"
-              >
-                <LogOut className="w-3.5 h-3.5" />
-                <span>Cerrar Sesión</span>
+                <X className="w-5 h-5" />
               </button>
             </div>
+
+            {/* Navigation Links */}
+            <nav className="space-y-1">
+              {navItems.map((item) => {
+                const Icon = item.icon;
+                const isActive = activeTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => {
+                      setActiveTab(item.id);
+                      setIsMobileNavOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold font-sans transition-all cursor-pointer ${
+                      isActive
+                        ? 'bg-stone-900 text-white shadow-xs'
+                        : 'text-stone-600 hover:text-stone-950 hover:bg-stone-100/70'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Icon className={`w-4 h-4 ${isActive ? 'text-amber-400' : 'text-stone-500'}`} />
+                      <span>{item.label}</span>
+                    </div>
+                    {item.badge && (
+                      <span
+                        className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                          isActive
+                            ? 'bg-white/20 text-white'
+                            : 'bg-stone-200 text-stone-700'
+                        }`}
+                      >
+                        {item.badge}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </nav>
+          </div>
+
+          {/* User Footer inside drawer */}
+          <div className="pt-4 border-t border-stone-200/60 space-y-2 mt-6">
+            <div className="p-2.5 rounded-xl bg-stone-100/80 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-stone-900 truncate max-w-[120px]">{user?.fullName}</span>
+                <span className="px-1.5 py-0.5 rounded-md bg-amber-200/80 text-amber-950 font-extrabold text-[9px]">
+                  ADMIN
+                </span>
+              </div>
+              <p className="text-[10px] text-stone-500 truncate mt-0.5">{user?.email}</p>
+            </div>
+
+            <button
+              onClick={() => {
+                setIsMobileNavOpen(false);
+                navigate('/');
+              }}
+              className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl border border-stone-200 text-stone-700 hover:text-stone-950 hover:bg-white text-xs font-bold transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5 text-stone-500" />
+              <span>Volver a la Tienda</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setIsMobileNavOpen(false);
+                logout();
+              }}
+              className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-rose-600 hover:bg-rose-50 text-xs font-semibold transition-colors cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Cerrar Sesión</span>
+            </button>
           </div>
         </div>
-      )}
+      </div>
 
       {/* SIDEBAR NAVIGATION (DESKTOP) */}
       <aside className="hidden lg:flex lg:w-64 bg-white/85 border-r border-stone-200/80 p-6 flex-col justify-between shrink-0 backdrop-blur-2xl sticky top-0 h-screen overflow-y-auto">
@@ -903,9 +1267,10 @@ export const AdminDashboardPage: React.FC = () => {
           <div>
             <h1 className="text-xl sm:text-2xl font-bold font-sans text-stone-950 tracking-tight">
               {activeTab === 'overview' && 'Resumen Ejecutivo'}
+              {activeTab === 'products' && 'Gestión del Catálogo de Amigurumis'}
               {activeTab === 'orders' && 'Gestión de Pedidos & Despachos'}
               {activeTab === 'customers' && 'Directorio de Clientes'}
-              {activeTab === 'coupons' && 'Cupones & Recompensas BTL'}
+              {activeTab === 'coupons' && 'Cupones & Recompensas'}
               {activeTab === 'btl' && 'Telemetría del Videojuego Pompón'}
               {activeTab === 'analytics' && 'Módulo de Data Analytics (Fase 3)'}
               {activeTab === 'ml' && 'Módulo de Machine Learning (Fase 4)'}
@@ -919,6 +1284,7 @@ export const AdminDashboardPage: React.FC = () => {
             <button
               onClick={() => {
                 if (activeTab === 'overview') loadOverview();
+                else if (activeTab === 'products') loadProducts();
                 else if (activeTab === 'orders') loadOrders();
                 else if (activeTab === 'customers') loadCustomers();
                 else if (activeTab === 'coupons') loadCoupons();
@@ -1005,7 +1371,7 @@ export const AdminDashboardPage: React.FC = () => {
               <div className="p-5 rounded-3xl liquid-glass border border-white/80 shadow-xs bg-white/75">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-stone-500">
-                    Partidas BTL & Cupones
+                    Partidas Pompón & Cupones
                   </span>
                   <div className="w-8 h-8 rounded-xl bg-purple-100/80 text-purple-800 flex items-center justify-center">
                     <Gamepad2 className="w-4 h-4" />
@@ -1094,6 +1460,503 @@ export const AdminDashboardPage: React.FC = () => {
               <span className="px-3 py-1 rounded-xl bg-amber-700 text-white font-extrabold text-[10px] shrink-0 uppercase tracking-wider">
                 Demostración Académica
               </span>
+            </div>
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------- */}
+        {/* TAB: PRODUCTS CATALOG MANAGEMENT (FASE 2F.5) */}
+        {/* ------------------------------------------------------------- */}
+        {activeTab === 'products' && (
+          <div className="space-y-6">
+            {/* Inventory & Catalog KPI Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+              <div className="p-4 rounded-2xl liquid-glass border border-white/80 shadow-xs bg-white/75">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-stone-500 block mb-1">
+                  Total Amigurumis
+                </span>
+                <div className="text-xl font-black text-stone-900 font-sans">
+                  {productMetrics?.totalProducts ?? products.length}
+                </div>
+                <p className="text-[10px] text-stone-500 mt-0.5">En base SQLite</p>
+              </div>
+
+              <div className="p-4 rounded-2xl liquid-glass border border-white/80 shadow-xs bg-white/75">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 block mb-1">
+                  Publicados
+                </span>
+                <div className="text-xl font-black text-emerald-950 font-sans">
+                  {productMetrics?.published ?? products.filter((p) => p.status === 'published').length}
+                </div>
+                <p className="text-[10px] text-emerald-600 mt-0.5">Visibles en tienda</p>
+              </div>
+
+              <div className="p-4 rounded-2xl liquid-glass border border-white/80 shadow-xs bg-white/75">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-stone-600 block mb-1">
+                  Ocultos
+                </span>
+                <div className="text-xl font-black text-stone-800 font-sans">
+                  {productMetrics?.hidden ?? products.filter((p) => p.status === 'hidden').length}
+                </div>
+                <p className="text-[10px] text-stone-500 mt-0.5">En taller / catálogo privado</p>
+              </div>
+
+              <div className="p-4 rounded-2xl liquid-glass border border-white/80 shadow-xs bg-white/75">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-rose-700 block mb-1">
+                  Agotados
+                </span>
+                <div className="text-xl font-black text-rose-950 font-sans">
+                  {productMetrics?.outOfStock ?? products.filter((p) => p.status === 'out_of_stock' || (p.stockUnits || 0) <= 0).length}
+                </div>
+                <p className="text-[10px] text-rose-600 mt-0.5">Sin stock disponible</p>
+              </div>
+
+              <div className="p-4 rounded-2xl liquid-glass border border-white/80 shadow-xs bg-white/75">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 block mb-1">
+                  Stock en Taller
+                </span>
+                <div className="text-xl font-black text-amber-950 font-sans">
+                  {productMetrics?.totalUnits ?? products.reduce((acc, p) => acc + (p.stockUnits || 0), 0)}
+                </div>
+                <p className="text-[10px] text-amber-800 mt-0.5">Unidades tejidas</p>
+              </div>
+
+              <div className="p-4 rounded-2xl liquid-glass border border-white/80 shadow-xs bg-white/75">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700 block mb-1">
+                  Valor Inventario
+                </span>
+                <div className="text-sm font-black text-indigo-950 font-sans truncate" title={formatCOP(productMetrics?.inventoryValue ?? 0)}>
+                  {formatCOP(productMetrics?.inventoryValue ?? 0)}
+                </div>
+                <p className="text-[10px] text-indigo-600 mt-0.5">Valor artesanal COP</p>
+              </div>
+            </div>
+
+            {/* Filter Toolbar & Add Product CTA */}
+            <div className="p-4 sm:p-5 rounded-3xl liquid-glass border border-white/80 shadow-xs bg-white/80 space-y-4">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold text-stone-900 font-sans flex items-center gap-2">
+                    <Package className="w-4 h-4 text-amber-700" />
+                    <span>Catálogo Maestro de Amigurumis</span>
+                  </h3>
+                  <p className="text-xs text-stone-500">
+                    Control de fichas técnicas artesanales, precios, inventario en tiempo real y visibilidad en tienda
+                  </p>
+                </div>
+
+                <button
+                  onClick={handleOpenCreateProduct}
+                  className="py-2.5 px-4 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs cursor-pointer transition-all shadow-md flex items-center justify-center gap-2 self-start md:self-auto shrink-0"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Nuevo Amigurumi</span>
+                </button>
+              </div>
+
+              {/* Filter controls */}
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-3 border-t border-stone-200/60">
+                {/* Search */}
+                <div className="sm:col-span-4 relative">
+                  <Search className="w-3.5 h-3.5 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={productSearch}
+                    onChange={(e) => {
+                      setProductSearch(e.target.value);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        loadProducts(productSearch, productCategoryFilter, productStatusFilter, productSort);
+                      }
+                    }}
+                    placeholder="Buscar por nombre, SKU o etiqueta..."
+                    className="w-full pl-9 pr-3 py-2 rounded-xl bg-white/90 border border-stone-200 text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  />
+                </div>
+
+                {/* Category */}
+                <div className="sm:col-span-3">
+                  <select
+                    value={productCategoryFilter}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setProductCategoryFilter(val);
+                      loadProducts(productSearch, val, productStatusFilter, productSort);
+                    }}
+                    className="w-full py-2 px-3 rounded-xl bg-white/90 border border-stone-200 text-xs text-stone-800 font-medium focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  >
+                    <option value="todos">Todas las Categorías</option>
+                    <option value="animales">Animales</option>
+                    <option value="fantasia">Fantasía</option>
+                    <option value="festivos">Festivos & Ocasiones</option>
+                    <option value="accesorios">Accesorios</option>
+                  </select>
+                </div>
+
+                {/* Status */}
+                <div className="sm:col-span-2">
+                  <select
+                    value={productStatusFilter}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setProductStatusFilter(val);
+                      loadProducts(productSearch, productCategoryFilter, val, productSort);
+                    }}
+                    className="w-full py-2 px-3 rounded-xl bg-white/90 border border-stone-200 text-xs text-stone-800 font-medium focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  >
+                    <option value="todos">Todos los Estados</option>
+                    <option value="published">Publicados</option>
+                    <option value="hidden">Ocultos</option>
+                    <option value="out_of_stock">Agotados</option>
+                  </select>
+                </div>
+
+                {/* Sort */}
+                <div className="sm:col-span-2">
+                  <select
+                    value={productSort}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setProductSort(val);
+                      loadProducts(productSearch, productCategoryFilter, productStatusFilter, val);
+                    }}
+                    className="w-full py-2 px-3 rounded-xl bg-white/90 border border-stone-200 text-xs text-stone-800 font-medium focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  >
+                    <option value="featured">Destacados primero</option>
+                    <option value="price_asc">Precio: Menor a Mayor</option>
+                    <option value="price_desc">Precio: Mayor a Menor</option>
+                    <option value="stock_asc">Stock: Menor primero</option>
+                    <option value="name_asc">Nombre: A-Z</option>
+                  </select>
+                </div>
+
+                {/* Action buttons */}
+                <div className="sm:col-span-1 flex items-center gap-1.5">
+                  <button
+                    onClick={() => loadProducts(productSearch, productCategoryFilter, productStatusFilter, productSort)}
+                    className="w-full py-2 px-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs cursor-pointer transition-colors shadow-xs flex items-center justify-center"
+                    title="Buscar"
+                  >
+                    <Search className="w-3.5 h-3.5" />
+                  </button>
+                  {(productSearch || productCategoryFilter !== 'todos' || productStatusFilter !== 'todos') && (
+                    <button
+                      onClick={() => {
+                        setProductSearch('');
+                        setProductCategoryFilter('todos');
+                        setProductStatusFilter('todos');
+                        setProductSort('featured');
+                        loadProducts('', 'todos', 'todos', 'featured');
+                      }}
+                      className="py-2 px-2.5 rounded-xl bg-stone-200 hover:bg-stone-300 text-stone-700 font-bold text-xs cursor-pointer transition-colors"
+                      title="Restablecer filtros"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Products Table (Desktop) */}
+            <div className="hidden md:block p-5 rounded-3xl liquid-glass border border-white/80 shadow-xs bg-white/80 overflow-hidden">
+              {products.length === 0 ? (
+                <div className="text-center py-12 space-y-3">
+                  <Package className="w-10 h-10 text-stone-300 mx-auto" />
+                  <p className="text-sm font-bold text-stone-700">No se encontraron amigurumis con los filtros seleccionados.</p>
+                  <p className="text-xs text-stone-400">Intenta cambiar los términos de búsqueda o crear una nueva pieza.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs min-w-[800px]">
+                    <thead>
+                      <tr className="border-b border-stone-200/80 text-stone-500 font-bold uppercase tracking-wider text-[10px]">
+                        <th className="pb-3 pl-2">Amigurumi</th>
+                        <th className="pb-3">Categoría & Dificultad</th>
+                        <th className="pb-3">Dimensiones</th>
+                        <th className="pb-3">Precio (COP)</th>
+                        <th className="pb-3 text-center">Inventario Taller</th>
+                        <th className="pb-3 text-center">Estado Comercial</th>
+                        <th className="pb-3 text-right pr-2">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-stone-100">
+                      {products.map((prod) => {
+                        const isLowStock = (prod.stockUnits || 0) <= (prod.lowStockThreshold || 3) && (prod.stockUnits || 0) > 0;
+                        const isOutOfStock = (prod.stockUnits || 0) <= 0 || prod.status === 'out_of_stock';
+                        const isBusy = quickActionId === prod.id;
+
+                        return (
+                          <tr key={prod.id} className="hover:bg-amber-50/40 transition-colors">
+                            {/* Product Thumbnail & Title */}
+                            <td className="py-3 pl-2">
+                              <div className="flex items-center gap-3">
+                                <div className="w-12 h-12 rounded-xl overflow-hidden bg-stone-100 border border-stone-200/70 shrink-0">
+                                  <img
+                                    src={prod.imageUrl || '/src/assets/images/hero_amigurumi_showcase_1794329731742.jpg'}
+                                    alt={prod.name}
+                                    className="w-full h-full object-cover"
+                                    onError={(e) => {
+                                      (e.target as HTMLElement).style.display = 'none';
+                                    }}
+                                  />
+                                </div>
+                                <div>
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-bold text-stone-900 line-clamp-1">{prod.name}</span>
+                                    {prod.featured && (
+                                      <span className="px-1.5 py-0.2 rounded-md bg-amber-100 text-amber-900 text-[9px] font-extrabold uppercase">
+                                        Destacado
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="font-mono text-[10px] text-stone-400 block mt-0.5">
+                                    SKU: {prod.sku || 'N/A'}
+                                  </span>
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* Category & Difficulty */}
+                            <td className="py-3">
+                              <div className="space-y-0.5">
+                                <span className="capitalize font-semibold text-stone-700 block text-[11px]">
+                                  {prod.category}
+                                </span>
+                                <span className="text-[10px] text-stone-500 flex items-center gap-1">
+                                  <Clock className="w-3 h-3 text-amber-700" />
+                                  {prod.approxCraftTimeHours || 5}h &bull; {prod.difficulty || 'Intermedia'}
+                                </span>
+                              </div>
+                            </td>
+
+                            {/* Dimensions */}
+                            <td className="py-3 text-stone-600 font-mono text-[11px]">
+                              {prod.dimensions ? (
+                                <span>
+                                  {prod.dimensions.heightCm}h &times; {prod.dimensions.widthCm}w
+                                  {prod.dimensions.depthCm ? ` &times; ${prod.dimensions.depthCm}d` : ''} cm
+                                </span>
+                              ) : (
+                                <span className="text-stone-400">20 &times; 12 cm</span>
+                              )}
+                            </td>
+
+                            {/* Price */}
+                            <td className="py-3 font-bold text-stone-900 font-sans text-xs">
+                              {formatCOP(prod.price)}
+                            </td>
+
+                            {/* Inventory with Quick Stepper */}
+                            <td className="py-3 text-center">
+                              <div className="inline-flex items-center gap-1.5 bg-stone-100/90 p-1 rounded-xl border border-stone-200">
+                                <button
+                                  onClick={() => handleQuickStockChange(prod.id, prod.stockUnits || 0, -1)}
+                                  disabled={(prod.stockUnits || 0) <= 0 || isBusy}
+                                  className="w-6 h-6 rounded-lg bg-white text-stone-700 hover:bg-stone-200/80 disabled:opacity-40 flex items-center justify-center transition-colors cursor-pointer shadow-2xs"
+                                  title="Reducir inventario en 1"
+                                >
+                                  <Minus className="w-3 h-3" />
+                                </button>
+                                <span className={`w-8 text-center font-bold text-xs ${
+                                  isOutOfStock
+                                    ? 'text-rose-600'
+                                    : isLowStock
+                                    ? 'text-amber-700'
+                                    : 'text-stone-900'
+                                }`}>
+                                  {prod.stockUnits ?? 0}
+                                </span>
+                                <button
+                                  onClick={() => handleQuickStockChange(prod.id, prod.stockUnits || 0, 1)}
+                                  disabled={isBusy}
+                                  className="w-6 h-6 rounded-lg bg-white text-stone-700 hover:bg-stone-200/80 disabled:opacity-40 flex items-center justify-center transition-colors cursor-pointer shadow-2xs"
+                                  title="Incrementar inventario en 1"
+                                >
+                                  <Plus className="w-3 h-3" />
+                                </button>
+                              </div>
+                              <div className="mt-1">
+                                {isOutOfStock ? (
+                                  <span className="text-[9px] font-bold text-rose-700 uppercase">Sin Stock</span>
+                                ) : isLowStock ? (
+                                  <span className="text-[9px] font-bold text-amber-700 uppercase">Bajo Stock</span>
+                                ) : (
+                                  <span className="text-[9px] font-semibold text-emerald-700">En Taller</span>
+                                )}
+                              </div>
+                            </td>
+
+                            {/* Commercial Status & Quick Toggle */}
+                            <td className="py-3 text-center">
+                              <button
+                                onClick={() => handleToggleProductStatus(prod.id, prod.status)}
+                                disabled={isBusy}
+                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border transition-all cursor-pointer shadow-2xs ${
+                                  prod.status === 'published'
+                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
+                                    : prod.status === 'out_of_stock'
+                                    ? 'bg-rose-50 text-rose-800 border-rose-300 hover:bg-rose-100'
+                                    : 'bg-stone-100 text-stone-700 border-stone-300 hover:bg-stone-200'
+                                }`}
+                                title="Haz clic para alternar visibilidad pública / oculta"
+                              >
+                                {prod.status === 'published' ? (
+                                  <>
+                                    <Eye className="w-3 h-3 text-emerald-600" />
+                                    <span>Publicado</span>
+                                  </>
+                                ) : prod.status === 'out_of_stock' ? (
+                                  <>
+                                    <AlertCircle className="w-3 h-3 text-rose-600" />
+                                    <span>Agotado</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <EyeOff className="w-3 h-3 text-stone-500" />
+                                    <span>Oculto</span>
+                                  </>
+                                )}
+                              </button>
+                            </td>
+
+                            {/* Actions */}
+                            <td className="py-3 pr-2 text-right">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  onClick={() => {
+                                    setDetailProduct(prod);
+                                    setIsDetailModalOpen(true);
+                                  }}
+                                  className="py-1.5 px-2 rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-700 text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1"
+                                  title="Ver Ficha Técnica Artesanal"
+                                >
+                                  <FileText className="w-3 h-3 text-stone-500" />
+                                  <span>Ficha</span>
+                                </button>
+                                <button
+                                  onClick={() => handleOpenEditProduct(prod)}
+                                  className="py-1.5 px-2 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-900 text-[11px] font-bold transition-colors cursor-pointer flex items-center gap-1"
+                                  title="Editar Amigurumi"
+                                >
+                                  <Edit3 className="w-3 h-3 text-amber-700" />
+                                  <span>Editar</span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Products Cards (Mobile) */}
+            <div className="md:hidden space-y-3">
+              {products.length === 0 ? (
+                <div className="text-center py-8 p-4 rounded-2xl bg-white border border-stone-200 space-y-2">
+                  <Package className="w-8 h-8 text-stone-300 mx-auto" />
+                  <p className="text-xs font-bold text-stone-700">No se encontraron amigurumis.</p>
+                </div>
+              ) : (
+                products.map((prod) => {
+                  const isLowStock = (prod.stockUnits || 0) <= (prod.lowStockThreshold || 3) && (prod.stockUnits || 0) > 0;
+                  const isOutOfStock = (prod.stockUnits || 0) <= 0 || prod.status === 'out_of_stock';
+                  const isBusy = quickActionId === prod.id;
+
+                  return (
+                    <div key={prod.id} className="p-4 rounded-2xl bg-white border border-stone-200/80 shadow-xs space-y-3">
+                      <div className="flex items-start gap-3">
+                        <div className="w-14 h-14 rounded-xl overflow-hidden bg-stone-100 border border-stone-200 shrink-0">
+                          <img
+                            src={prod.imageUrl || '/src/assets/images/hero_amigurumi_showcase_1794329731742.jpg'}
+                            alt={prod.name}
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              (e.target as HTMLElement).style.display = 'none';
+                            }}
+                          />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-1">
+                            <h4 className="font-bold text-xs text-stone-900 truncate">{prod.name}</h4>
+                            {prod.featured && (
+                              <span className="px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 text-[9px] font-bold shrink-0">
+                                Destacado
+                              </span>
+                            )}
+                          </div>
+                          <p className="font-mono text-[10px] text-stone-400 mt-0.5">SKU: {prod.sku || 'N/A'}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="font-black text-amber-950 text-xs">{formatCOP(prod.price)}</span>
+                            <span className="text-[10px] text-stone-500 font-medium capitalize">&bull; {prod.category}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-2 border-t border-stone-100 gap-2">
+                        {/* Stock Stepper */}
+                        <div className="flex items-center gap-1.5 bg-stone-100 p-1 rounded-xl">
+                          <button
+                            onClick={() => handleQuickStockChange(prod.id, prod.stockUnits || 0, -1)}
+                            disabled={(prod.stockUnits || 0) <= 0 || isBusy}
+                            className="w-6 h-6 rounded-lg bg-white text-stone-700 disabled:opacity-40 flex items-center justify-center cursor-pointer shadow-2xs"
+                          >
+                            <Minus className="w-3 h-3" />
+                          </button>
+                          <span className="w-6 text-center font-bold text-xs text-stone-900">
+                            {prod.stockUnits ?? 0}
+                          </span>
+                          <button
+                            onClick={() => handleQuickStockChange(prod.id, prod.stockUnits || 0, 1)}
+                            disabled={isBusy}
+                            className="w-6 h-6 rounded-lg bg-white text-stone-700 disabled:opacity-40 flex items-center justify-center cursor-pointer shadow-2xs"
+                          >
+                            <Plus className="w-3 h-3" />
+                          </button>
+                        </div>
+
+                        {/* Status Toggle */}
+                        <button
+                          onClick={() => handleToggleProductStatus(prod.id, prod.status)}
+                          disabled={isBusy}
+                          className={`px-2.5 py-1 rounded-full text-[10px] font-bold border transition-colors cursor-pointer ${
+                            prod.status === 'published'
+                              ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                              : 'bg-stone-100 text-stone-700 border-stone-300'
+                          }`}
+                        >
+                          {prod.status === 'published' ? 'Publicado' : 'Oculto'}
+                        </button>
+
+                        {/* Detail & Edit */}
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => {
+                              setDetailProduct(prod);
+                              setIsDetailModalOpen(true);
+                            }}
+                            className="p-1.5 rounded-lg bg-stone-100 text-stone-700 hover:bg-stone-200 cursor-pointer"
+                            title="Ficha Técnica"
+                          >
+                            <FileText className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleOpenEditProduct(prod)}
+                            className="p-1.5 rounded-lg bg-amber-500/10 text-amber-900 hover:bg-amber-500/20 cursor-pointer font-bold text-xs"
+                            title="Editar"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         )}
@@ -1472,9 +2335,9 @@ export const AdminDashboardPage: React.FC = () => {
             {/* Action Bar */}
             <div className="p-4 rounded-3xl liquid-glass border border-white/80 shadow-xs bg-white/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <h3 className="text-sm font-bold text-stone-900">Gestión de Cupones Comerciales & Recompensas BTL</h3>
+                <h3 className="text-sm font-bold text-stone-900">Gestión de Cupones Comerciales & Recompensas de Pompón</h3>
                 <p className="text-xs text-stone-500">
-                  Los cupones BTL derivan de la superación de niveles en el minijuego de Pompón. Los cupones comerciales son creados por la administración.
+                  Las recompensas de juego derivan de la superación de niveles en el minijuego de Pompón. Los cupones comerciales son creados por la administración.
                 </p>
               </div>
 
@@ -1493,7 +2356,7 @@ export const AdminDashboardPage: React.FC = () => {
                 <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
                   {[
                     { id: 'all', label: 'Todos' },
-                    { id: 'btl', label: 'Recompensas BTL' },
+                    { id: 'btl', label: 'Recompensas de Juego' },
                     { id: 'commercial_general', label: 'Comercial General' },
                     { id: 'commercial_exclusive', label: 'Exclusivo Cliente' },
                   ].map((t) => (
@@ -1616,7 +2479,7 @@ export const AdminDashboardPage: React.FC = () => {
                             <td className="py-3 px-4 whitespace-nowrap">
                               {isBtl ? (
                                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-purple-100 text-purple-900 font-bold text-[10px] border border-purple-200 whitespace-nowrap shrink-0">
-                                  Recompensa BTL
+                                  Recompensa de Pompón
                                 </span>
                               ) : isExclusive ? (
                                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 font-bold text-[10px] border border-amber-300 whitespace-nowrap shrink-0">
@@ -1757,7 +2620,7 @@ export const AdminDashboardPage: React.FC = () => {
               <div className="p-5 rounded-3xl liquid-glass border border-white/80 shadow-xs bg-white/80">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-stone-500">
-                    Cupones BTL Generados
+                    Recompensas Otorgadas
                   </span>
                   <Tag className="w-5 h-5 text-emerald-700" />
                 </div>
@@ -1842,7 +2705,7 @@ export const AdminDashboardPage: React.FC = () => {
                   </span>
                 </div>
                 <p className="text-xs text-stone-500 leading-relaxed">
-                  Agregación diaria y semanal de pedidos confirmados versus canje de cupones BTL.
+                  Agregación diaria y semanal de pedidos confirmados versus canje de recompensas de Pompón.
                 </p>
                 <div className="h-36 rounded-2xl bg-stone-100/80 border border-dashed border-stone-300 flex flex-col items-center justify-center p-4 text-center">
                   <BarChart3 className="w-8 h-8 text-stone-400 mb-1" />
@@ -1927,7 +2790,7 @@ export const AdminDashboardPage: React.FC = () => {
                 </div>
                 <h4 className="text-xs font-bold text-stone-900">Detección de Fraude en Cupones</h4>
                 <p className="text-[11px] text-stone-500 leading-relaxed">
-                  Clasificación de anomalías para identificar reclamos automáticos de recompensas BTL sin jugabilidad humana.
+                  Clasificación de anomalías para identificar reclamos automáticos de recompensas de Pompón sin jugabilidad humana.
                 </p>
                 <div className="pt-2 text-[10px] font-mono text-rose-900 font-bold">
                   Interface: AnomalyDetectionPayload
@@ -2321,6 +3184,609 @@ export const AdminDashboardPage: React.FC = () => {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* ============================================================= */}
+        {/* MODAL 5: PRODUCT CREATE & EDIT MODAL (FASE 2F.5) */}
+        {/* ============================================================= */}
+        {isProductModalOpen && (
+          <div className="fixed inset-0 bg-stone-950/60 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+            <div className="w-full max-w-3xl bg-white/95 rounded-3xl border border-white/80 shadow-2xl p-6 sm:p-7 space-y-5 animate-fadeIn my-6 max-h-[90vh] flex flex-col">
+              {/* Modal Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-stone-200/70 shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center">
+                    <Package className="w-5 h-5 text-amber-700" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-stone-900 font-sans">
+                      {editingProduct ? `Editar: ${editingProduct.name}` : 'Nuevo Amigurumi Artesanal'}
+                    </h3>
+                    <p className="text-[11px] text-stone-500">
+                      {editingProduct
+                        ? `Modificando registro SKU ${editingProduct.sku || editingProduct.id}`
+                        : 'Registro maestro de pieza tejida a mano con persistencia en SQLite'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setIsProductModalOpen(false)}
+                  disabled={isSubmittingProduct}
+                  className="p-1.5 rounded-xl text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Modal Form Body (Scrollable) */}
+              <form onSubmit={handleSaveProduct} className="flex-1 overflow-y-auto pr-1 space-y-5">
+                {/* Error & Success Alerts */}
+                {productModalError && (
+                  <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2.5">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>{productModalError}</span>
+                  </div>
+                )}
+                {productModalSuccess && (
+                  <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center gap-2.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>{productModalSuccess}</span>
+                  </div>
+                )}
+
+                {/* Section 1: General Info */}
+                <div className="space-y-3">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-700" />
+                    <span>1. Identificación & Categoría</span>
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                    <div className="sm:col-span-6">
+                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                        Nombre de la Pieza <span className="text-rose-600">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={productForm.name}
+                        onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
+                        placeholder="Ej: Osito Meloso de Algodón"
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-3">
+                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                        SKU Comercial
+                      </label>
+                      <input
+                        type="text"
+                        value={productForm.sku}
+                        onChange={(e) => setProductForm({ ...productForm, sku: e.target.value.toUpperCase() })}
+                        placeholder="Ej: AMI-009"
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs font-mono uppercase text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-3">
+                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                        Categoría
+                      </label>
+                      <select
+                        value={productForm.category}
+                        onChange={(e) => setProductForm({ ...productForm, category: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                      >
+                        <option value="animales">Animales</option>
+                        <option value="fantasia">Fantasía</option>
+                        <option value="festivos">Festivos & Ocasiones</option>
+                        <option value="accesorios">Accesorios</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Section 2: Pricing & Stock */}
+                <div className="space-y-3 pt-2 border-t border-stone-200/60">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
+                    <TrendingUp className="w-3.5 h-3.5 text-amber-700" />
+                    <span>2. Valores Comerciales & Stock en Taller</span>
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                    <div>
+                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                        Precio COP <span className="text-rose-600">*</span>
+                      </label>
+                      <input
+                        type="number"
+                        required
+                        min={1000}
+                        step={500}
+                        value={productForm.price}
+                        onChange={(e) => setProductForm({ ...productForm, price: Number(e.target.value) || 0 })}
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs font-bold text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                      />
+                      <span className="text-[10px] text-stone-500 mt-0.5 block">{formatCOP(productForm.price)}</span>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                        Inventario Físico (Unidades) <span className="text-rose-600">*</span>
+                      </label>
+                      <input
+                        type="number"
+                        required
+                        min={0}
+                        value={productForm.stockUnits}
+                        onChange={(e) => setProductForm({ ...productForm, stockUnits: Number(e.target.value) || 0 })}
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs font-bold text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                        Umbral Alerta Bajo Stock
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={productForm.lowStockThreshold}
+                        onChange={(e) => setProductForm({ ...productForm, lowStockThreshold: Number(e.target.value) || 2 })}
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                        Estado de Publicación
+                      </label>
+                      <select
+                        value={productForm.status}
+                        onChange={(e) => setProductForm({ ...productForm, status: e.target.value as any })}
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs font-bold text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                      >
+                        <option value="published">Publicado (Visible en tienda)</option>
+                        <option value="hidden">Oculto (Borrador interno)</option>
+                        <option value="out_of_stock">Agotado (Sin unidades)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <input
+                      type="checkbox"
+                      id="product-featured-cb"
+                      checked={productForm.featured}
+                      onChange={(e) => setProductForm({ ...productForm, featured: e.target.checked })}
+                      className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 border-stone-300"
+                    />
+                    <label htmlFor="product-featured-cb" className="text-xs font-semibold text-stone-700 cursor-pointer">
+                      Destacar este amigurumi en la cabecera de la vitrina principal
+                    </label>
+                  </div>
+                </div>
+
+                {/* Section 3: Descriptions */}
+                <div className="space-y-3 pt-2 border-t border-stone-200/60">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5 text-amber-700" />
+                    <span>3. Reseñas & Contenido Comercial</span>
+                  </h4>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                        Descripción Corta (Tarjeta de catálogo):
+                      </label>
+                      <input
+                        type="text"
+                        value={productForm.shortDescription}
+                        onChange={(e) => setProductForm({ ...productForm, shortDescription: e.target.value })}
+                        placeholder="Ej: Tierno oso tejido a mano en hilo de algodón rústico color miel."
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                        Descripción Completa / Historia de la Pieza:
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={productForm.fullDescription}
+                        onChange={(e) => setProductForm({ ...productForm, fullDescription: e.target.value })}
+                        placeholder="Detalla la inspiración artesanal, acabados y textura de la pieza..."
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Section 4: Artisanal Metrics & Craftsmanship */}
+                <div className="space-y-3 pt-2 border-t border-stone-200/60">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
+                    <Ruler className="w-3.5 h-3.5 text-amber-700" />
+                    <span>4. Ficha Técnica de Confección Artesanal</span>
+                  </h4>
+                  <div className="grid grid-cols-2 sm:grid-cols-6 gap-3">
+                    <div>
+                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                        Alto (cm)
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={productForm.heightCm}
+                        onChange={(e) => setProductForm({ ...productForm, heightCm: Number(e.target.value) || 0 })}
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                        Ancho (cm)
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={productForm.widthCm}
+                        onChange={(e) => setProductForm({ ...productForm, widthCm: Number(e.target.value) || 0 })}
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                        Profundidad (cm)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={productForm.depthCm}
+                        onChange={(e) => setProductForm({ ...productForm, depthCm: Number(e.target.value) || 0 })}
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                        Horas de Tejido
+                      </label>
+                      <input
+                        type="number"
+                        min={0.5}
+                        step={0.5}
+                        value={productForm.craftTimeHours}
+                        onChange={(e) => setProductForm({ ...productForm, craftTimeHours: Number(e.target.value) || 0 })}
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                        Dificultad
+                      </label>
+                      <select
+                        value={productForm.difficulty}
+                        onChange={(e) => setProductForm({ ...productForm, difficulty: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                      >
+                        <option value="Básica">Básica</option>
+                        <option value="Fácil">Fácil</option>
+                        <option value="Intermedia">Intermedia</option>
+                        <option value="Avanzada">Avanzada</option>
+                        <option value="Experta">Experta</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                        Técnica
+                      </label>
+                      <input
+                        type="text"
+                        value={productForm.weaveType}
+                        onChange={(e) => setProductForm({ ...productForm, weaveType: e.target.value })}
+                        placeholder="Punto bajo en espiral"
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Section 5: Materials & Care */}
+                <div className="space-y-3 pt-2 border-t border-stone-200/60">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5 text-amber-700" />
+                    <span>5. Materiales, Insumos & Preservación</span>
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                        Materiales e Insumos (Separados por coma):
+                      </label>
+                      <input
+                        type="text"
+                        value={productForm.materials}
+                        onChange={(e) => setProductForm({ ...productForm, materials: e.target.value })}
+                        placeholder="Hilo 100% algodón, Vellón siliconado, Ojos de seguridad"
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                        Paleta de Colores:
+                      </label>
+                      <input
+                        type="text"
+                        value={productForm.colors}
+                        onChange={(e) => setProductForm({ ...productForm, colors: e.target.value })}
+                        placeholder="Ej: Miel, marfil, café chocolate"
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                        Recomendaciones de Cuidado:
+                      </label>
+                      <input
+                        type="text"
+                        value={productForm.careInstructions}
+                        onChange={(e) => setProductForm({ ...productForm, careInstructions: e.target.value })}
+                        placeholder="Ej: Lavar a mano con agua fría y jabón suave. Secar horizontal a la sombra."
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Section 6: Image Management */}
+                <div className="space-y-3 pt-2 border-t border-stone-200/60">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
+                    <ImageIcon className="w-3.5 h-3.5 text-amber-700" />
+                    <span>6. Fotografía Principal del Amigurumi</span>
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-center">
+                    {/* Thumbnail preview */}
+                    <div className="sm:col-span-3">
+                      <div className="w-full aspect-square rounded-2xl overflow-hidden bg-stone-100 border border-stone-200 shadow-inner flex items-center justify-center relative">
+                        {productForm.imageUrl ? (
+                          <img
+                            src={productForm.imageUrl}
+                            alt="Vista previa"
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              (e.target as HTMLElement).style.display = 'none';
+                            }}
+                          />
+                        ) : (
+                          <div className="text-stone-400 text-center p-3">
+                            <ImageIcon className="w-8 h-8 mx-auto mb-1 opacity-50" />
+                            <span className="text-[10px]">Sin imagen</span>
+                          </div>
+                        )}
+                        {isUploadingImage && (
+                          <div className="absolute inset-0 bg-stone-900/60 flex flex-col items-center justify-center text-white">
+                            <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mb-1" />
+                            <span className="text-[10px] font-bold">Subiendo...</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Upload Controls */}
+                    <div className="sm:col-span-9 space-y-3">
+                      <div>
+                        <label className="text-xs font-bold text-stone-700 block mb-1">
+                          Cargar Archivo Local (JPEG, PNG o WebP, máx 5MB):
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <label className="py-2 px-3.5 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-800 text-xs font-bold cursor-pointer transition-colors border border-stone-200/80 flex items-center gap-2 shadow-2xs">
+                            <Upload className="w-4 h-4 text-amber-700" />
+                            <span>Seleccionar Fotografía</span>
+                            <input
+                              type="file"
+                              accept="image/jpeg,image/png,image/webp"
+                              onChange={handleFileUpload}
+                              disabled={isUploadingImage}
+                              className="hidden"
+                            />
+                          </label>
+                          <span className="text-[11px] text-stone-500">
+                            {isUploadingImage ? 'Procesando en servidor...' : 'Almacenamiento seguro en taller'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-xs font-bold text-stone-700 block mb-1">
+                          O especifica una ruta/URL de imagen directa:
+                        </label>
+                        <input
+                          type="text"
+                          value={productForm.imageUrl}
+                          onChange={(e) => setProductForm({ ...productForm, imageUrl: e.target.value })}
+                          placeholder="/uploads/... o /src/assets/images/..."
+                          className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs font-mono text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Modal Actions */}
+                <div className="flex items-center justify-end gap-3 pt-4 border-t border-stone-200/70">
+                  <button
+                    type="button"
+                    onClick={() => setIsProductModalOpen(false)}
+                    disabled={isSubmittingProduct}
+                    className="py-2.5 px-4 rounded-xl border border-stone-200 text-stone-700 hover:bg-stone-100 text-xs font-bold cursor-pointer transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmittingProduct || isUploadingImage}
+                    className="py-2.5 px-6 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold cursor-pointer transition-all shadow-md flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {isSubmittingProduct ? (
+                      <>
+                        <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        <span>Guardando Amigurumi...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-4 h-4" />
+                        <span>{editingProduct ? 'Actualizar Amigurumi' : 'Guardar en Catálogo'}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* ============================================================= */}
+        {/* MODAL 6: ARTISANAL TECHNICAL SHEET INSPECTOR (FASE 2F.5) */}
+        {/* ============================================================= */}
+        {isDetailModalOpen && detailProduct && (
+          <div className="fixed inset-0 bg-stone-950/60 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+            <div className="w-full max-w-2xl bg-white/95 rounded-3xl border border-white/80 shadow-2xl p-6 sm:p-7 space-y-5 animate-fadeIn my-6">
+              {/* Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-stone-200/70">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center">
+                    <FileText className="w-5 h-5 text-amber-700" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-stone-900 font-sans">
+                      Ficha Técnica Artesanal
+                    </h3>
+                    <p className="text-[11px] font-mono text-amber-900 font-bold">
+                      SKU: {detailProduct.sku || detailProduct.id} &bull; {detailProduct.name}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setIsDetailModalOpen(false)}
+                  className="p-1.5 rounded-xl text-stone-400 hover:text-stone-700 hover:bg-stone-100 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Main Info Hero */}
+              <div className="flex flex-col sm:flex-row gap-4 p-4 rounded-2xl bg-amber-50/60 border border-amber-200/70 items-center sm:items-start">
+                <div className="w-24 h-24 rounded-xl overflow-hidden bg-white border border-amber-200 shrink-0 shadow-xs">
+                  <img
+                    src={detailProduct.imageUrl || '/src/assets/images/hero_amigurumi_showcase_1794329731742.jpg'}
+                    alt={detailProduct.name}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                <div className="space-y-1.5 text-center sm:text-left flex-1 min-w-0">
+                  <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
+                    <h4 className="font-extrabold text-sm text-stone-900 font-sans">{detailProduct.name}</h4>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                      {detailProduct.status === 'published' ? 'En Vitrina' : detailProduct.status === 'out_of_stock' ? 'Agotado' : 'Oculto'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-stone-600 line-clamp-2">
+                    {detailProduct.shortDescription || detailProduct.fullDescription}
+                  </p>
+                  <div className="flex items-center justify-center sm:justify-start gap-4 pt-1 text-xs">
+                    <span className="font-bold text-amber-900 text-sm">{formatCOP(detailProduct.price)}</span>
+                    <span className="text-stone-500 font-medium">
+                      Stock: <strong className="text-stone-900">{detailProduct.stockUnits ?? 0} unid.</strong>
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Craft Specifications Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+                <div className="p-3 rounded-xl bg-stone-50 border border-stone-200/70">
+                  <span className="text-[10px] uppercase font-bold text-stone-500 block mb-1">Dimensiones</span>
+                  <p className="font-bold text-stone-800">
+                    {detailProduct.dimensions
+                      ? `${detailProduct.dimensions.heightCm} alto × ${detailProduct.dimensions.widthCm} ancho ${detailProduct.dimensions.depthCm ? `× ${detailProduct.dimensions.depthCm} prof.` : ''} cm`
+                      : '20 × 12 cm'}
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-stone-50 border border-stone-200/70">
+                  <span className="text-[10px] uppercase font-bold text-stone-500 block mb-1">Tiempo de Tejido</span>
+                  <p className="font-bold text-amber-900">
+                    {detailProduct.approxCraftTimeHours || 5} horas estimadas
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-stone-50 border border-stone-200/70">
+                  <span className="text-[10px] uppercase font-bold text-stone-500 block mb-1">Nivel Dificultad</span>
+                  <p className="font-bold text-stone-800">{detailProduct.difficulty || 'Intermedia'}</p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-stone-50 border border-stone-200/70 sm:col-span-2">
+                  <span className="text-[10px] uppercase font-bold text-stone-500 block mb-1">Técnica de Crochet</span>
+                  <p className="font-semibold text-stone-800">{detailProduct.weaveType || 'Punto bajo en espiral continua'}</p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-stone-50 border border-stone-200/70">
+                  <span className="text-[10px] uppercase font-bold text-stone-500 block mb-1">Paleta de Colores</span>
+                  <p className="font-semibold text-stone-800">{detailProduct.colors || 'Tostado, marfil'}</p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-stone-50 border border-stone-200/70 sm:col-span-3">
+                  <span className="text-[10px] uppercase font-bold text-stone-500 block mb-1">Materiales e Insumos</span>
+                  <p className="text-stone-700 leading-relaxed">
+                    {Array.isArray(detailProduct.materials)
+                      ? detailProduct.materials.join(', ')
+                      : detailProduct.materials || 'Hilo 100% algodón rústico peinado, Vellón siliconado hipoalergénico, Ojos de seguridad con traba'}
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-stone-50 border border-stone-200/70 sm:col-span-3">
+                  <span className="text-[10px] uppercase font-bold text-stone-500 block mb-1">Cuidados & Conservación</span>
+                  <p className="text-stone-700 leading-relaxed">
+                    {detailProduct.careInstructions || 'Lavar a mano con agua fría y jabón suave. Secar horizontal a la sombra sin retorcer.'}
+                  </p>
+                </div>
+
+                {detailProduct.fullDescription && (
+                  <div className="p-3 rounded-xl bg-stone-50 border border-stone-200/70 sm:col-span-3">
+                    <span className="text-[10px] uppercase font-bold text-stone-500 block mb-1">Descripción Detallada</span>
+                    <p className="text-stone-700 leading-relaxed whitespace-pre-line text-[11px]">
+                      {detailProduct.fullDescription}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-between pt-3 border-t border-stone-200/70">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDetailModalOpen(false);
+                    handleOpenEditProduct(detailProduct);
+                  }}
+                  className="py-2 px-4 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-900 text-xs font-bold cursor-pointer transition-colors flex items-center gap-1.5"
+                >
+                  <Edit3 className="w-3.5 h-3.5 text-amber-700" />
+                  <span>Modificar Datos</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsDetailModalOpen(false)}
+                  className="py-2 px-4 rounded-xl bg-stone-900 hover:bg-stone-800 text-white text-xs font-bold cursor-pointer transition-colors"
+                >
+                  Cerrar Ficha
+                </button>
+              </div>
             </div>
           </div>
         )}

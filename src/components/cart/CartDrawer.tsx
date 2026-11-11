@@ -141,7 +141,8 @@ export const CartDrawer: React.FC = () => {
                         </span>
                         <button
                           onClick={() => updateQuantity(item.id, 1)}
-                          className="w-6 h-6 rounded flex items-center justify-center text-stone-600 hover:bg-stone-100 transition-colors cursor-pointer"
+                          disabled={typeof item.product.stockUnits === 'number' && item.quantity >= item.product.stockUnits}
+                          className="w-6 h-6 rounded flex items-center justify-center text-stone-600 hover:bg-stone-100 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           aria-label="Aumentar cantidad"
                         >
                           <Plus className="w-3 h-3" />

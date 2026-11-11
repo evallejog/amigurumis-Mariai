@@ -167,8 +167,12 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                     {quantity}
                   </span>
                   <button
-                    onClick={() => setQuantity((q) => q + 1)}
-                    className="w-8 h-8 rounded-lg flex items-center justify-center text-stone-600 hover:bg-stone-100 font-bold transition-colors cursor-pointer"
+                    onClick={() => setQuantity((q) => {
+                      const maxStock = typeof product.stockUnits === 'number' ? product.stockUnits : 999;
+                      return Math.min(maxStock, q + 1);
+                    })}
+                    disabled={typeof product.stockUnits === 'number' && quantity >= product.stockUnits}
+                    className="w-8 h-8 rounded-lg flex items-center justify-center text-stone-600 hover:bg-stone-100 font-bold transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     +
                   </button>

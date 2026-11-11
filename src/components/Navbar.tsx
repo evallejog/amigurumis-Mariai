@@ -82,7 +82,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeSection, onNavigate }) => 
               className="relative py-1 px-3 rounded-full bg-amber-100/90 text-amber-900 hover:bg-amber-200/90 border border-amber-300/60 font-extrabold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
             >
               <Gamepad2 className="w-3.5 h-3.5 text-amber-700" />
-              <span>Jugar BTL</span>
+              <span>Jugar Pompón</span>
               <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-stone-950 text-[8px] font-black tracking-wider uppercase">
                 PROMO
               </span>
@@ -229,7 +229,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeSection, onNavigate }) => 
             >
               <span className="flex items-center gap-2">
                 <Gamepad2 className="w-4 h-4" />
-                <span>Jugar Minivideojuego BTL</span>
+                <span>Jugar Videojuego Pompón</span>
               </span>
               <span className="px-2 py-0.5 rounded-full bg-amber-500 text-stone-950 text-xs font-black">
                 PROMO

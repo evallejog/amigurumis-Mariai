@@ -21,7 +21,7 @@ export const Hero: React.FC<HeroProps> = ({
           <div className="lg:col-span-7 space-y-6 text-center lg:text-left">
             <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full liquid-glass text-xs font-semibold text-stone-800 shadow-xs border border-white/80">
               <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-              <span>Alta Confección a Crochet & Experiencia Gamificada BTL</span>
+              <span>Alta Confección a Crochet & Videojuego Interactivo Pompón</span>
             </div>
 
             <h1 className="text-4xl sm:text-5xl lg:text-6xl font-sans font-extrabold text-stone-900 tracking-tight leading-[1.12] text-balance">

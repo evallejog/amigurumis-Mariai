@@ -20,7 +20,7 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
             <BrandLogo size="md" showTagline={true} />
             <p className="text-xs text-stone-500 max-w-sm leading-relaxed font-normal pt-1">
               Taller artesanal colombiano dedicado a la creación punto a punto de amigurumis y figuras
-              a crochet con materiales hipoalergénicos y experiencias lúdicas BTL.
+              a crochet con materiales hipoalergénicos y experiencias interactivas.
             </p>
           </div>
 
@@ -51,7 +51,7 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
                   onClick={() => onNavigate('juego')}
                   className="hover:text-stone-900 transition-colors cursor-pointer"
                 >
-                  Las Aventuras de Pompón (BTL)
+                  Las Aventuras de Pompón (Videojuego)
                 </button>
               </li>
               <li>

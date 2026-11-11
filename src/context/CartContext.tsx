@@ -130,23 +130,41 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [items, currentUserId]);
 
   const addToCart = (product: Product, quantity = 1, customDetails?: CartItem['customDetails']) => {
+    // Verificar si el amigurumi está agotado
+    const isOutOfStock =
+      product.availability === 'out_of_stock' ||
+      (typeof product.stockUnits === 'number' && product.stockUnits <= 0) ||
+      product.status === 'out_of_stock' ||
+      product.status === 'hidden';
+
+    if (isOutOfStock) {
+      console.warn(`[CART] Intento de agregar producto agotado: ${product.name}`);
+      return;
+    }
+
+    const availableStock = typeof product.stockUnits === 'number' ? product.stockUnits : 999;
+    const requestedQty = Math.max(1, quantity);
+
     setItems((prev) => {
       const existingIndex = prev.findIndex((item) => item.product.id === product.id);
       if (existingIndex > -1) {
+        const currentQty = prev[existingIndex].quantity;
+        const targetQty = Math.min(availableStock, currentQty + requestedQty);
         const updated = [...prev];
         updated[existingIndex] = {
           ...updated[existingIndex],
-          quantity: updated[existingIndex].quantity + quantity,
+          quantity: targetQty,
         };
         return updated;
       }
 
+      const initialQty = Math.min(availableStock, requestedQty);
       return [
         ...prev,
         {
           id: `cart-${product.id}-${Date.now()}`,
           product,
-          quantity,
+          quantity: initialQty,
           customDetails,
         },
       ];
@@ -164,8 +182,11 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       prev
         .map((item) => {
           if (item.id === itemId) {
+            const availableStock =
+              typeof item.product.stockUnits === 'number' ? item.product.stockUnits : 999;
             const newQty = item.quantity + delta;
-            return newQty > 0 ? { ...item, quantity: newQty } : null;
+            if (newQty <= 0) return null;
+            return { ...item, quantity: Math.min(availableStock, newQty) };
           }
           return item;
         })

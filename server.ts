@@ -1,6 +1,7 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
@@ -69,7 +70,10 @@ function generateRandomCouponCode(): string {
 
 async function startServer() {
   const app = express();
-  const PORT = parseInt(process.env.PORT || '3000', 10);
+  const portArgIdx = process.argv.indexOf('--port');
+  const cliPort = portArgIdx !== -1 ? parseInt(process.argv[portArgIdx + 1], 10) : NaN;
+  const envPort = process.env.PORT && process.env.PORT !== '8080' ? parseInt(process.env.PORT, 10) : NaN;
+  const PORT = !isNaN(cliPort) ? cliPort : (!isNaN(envPort) ? envPort : 3000);
 
   // Secure proxy trust: trust only loopback and private container/cloud network hops
   // Prevents external clients from spoofing client IP via forged X-Forwarded-For headers
@@ -742,12 +746,54 @@ async function startServer() {
       const authUser = getAuthUser(req);
       const userId = authUser ? authUser.id : null;
 
-      // Recalcular subtotal en servidor para prevenir manipulación
+      // 1. Recalcular subtotal en servidor y verificar inventario de forma autoritativa
       let calculatedSubtotal = 0;
+      const verifiedItems: Array<{
+        pId: string;
+        pName: string;
+        pPrice: number;
+        pQty: number;
+        pImg: string;
+        isCatalogProduct: boolean;
+      }> = [];
+
       for (const item of items) {
-        const itemPrice = typeof item.product?.price === 'number' ? item.product.price : (item.price || 0);
-        const itemQty = typeof item.quantity === 'number' && item.quantity > 0 ? item.quantity : 1;
-        calculatedSubtotal += itemPrice * itemQty;
+        const pId = item.product?.id || item.productId || 'ami-custom';
+        const pQty = typeof item.quantity === 'number' && item.quantity > 0 ? Math.floor(item.quantity) : 1;
+
+        const dbProduct = db.prepare('SELECT id, sku, name, price, stock_units, status, image_url FROM products WHERE id = ?').get(pId) as any;
+        if (dbProduct) {
+          if (dbProduct.status === 'hidden') {
+            return res.status(400).json({ error: `El producto "${dbProduct.name}" no está disponible en la tienda.` });
+          }
+          if (dbProduct.stock_units < pQty) {
+            return res.status(400).json({
+              error: `Inventario insuficiente para "${dbProduct.name}". Unidades disponibles: ${dbProduct.stock_units}, solicitadas: ${pQty}.`,
+            });
+          }
+          const price = dbProduct.price;
+          calculatedSubtotal += price * pQty;
+          verifiedItems.push({
+            pId: dbProduct.id,
+            pName: dbProduct.name,
+            pPrice: price,
+            pQty,
+            pImg: dbProduct.image_url || item.product?.imageUrl || item.imageUrl || '',
+            isCatalogProduct: true,
+          });
+        } else {
+          // Producto artesanal personalizado o bajo comisión fuera de catálogo
+          const customPrice = typeof item.product?.price === 'number' ? item.product.price : (typeof item.price === 'number' ? item.price : 0);
+          calculatedSubtotal += customPrice * pQty;
+          verifiedItems.push({
+            pId,
+            pName: item.product?.name || item.productName || 'Figura artesanal personalizada',
+            pPrice: customPrice,
+            pQty,
+            pImg: item.product?.imageUrl || item.imageUrl || '',
+            isCatalogProduct: false,
+          });
+        }
       }
 
       if (calculatedSubtotal <= 0 && typeof subtotal === 'number') {
@@ -758,7 +804,6 @@ async function startServer() {
       const validShippingCost =
         shippingMethod === 'express' ? 18000 : shippingMethod === 'pickup' ? 0 : 12000;
 
-      // Validación autoritativa de cupón en el servidor
       // Validación autoritativa de cupón en el servidor
       let serverDiscount = 0;
       let appliedCouponCode: string | null = null;
@@ -812,7 +857,7 @@ async function startServer() {
       const createdAt = new Date().toISOString();
       const accessToken = generateOrderAccessToken();
 
-      // Transaction to insert order + items + atomically update coupon uses
+      // Transaction to insert order + items + atomically update coupon uses + deduct inventory
       const insertOrder = db.transaction(() => {
         db.prepare(`
           INSERT INTO orders (
@@ -858,27 +903,38 @@ async function startServer() {
           }
         }
 
+        // Descuento atómico de inventario en SQLite para productos de catálogo
+        for (const item of verifiedItems) {
+          if (item.isCatalogProduct) {
+            const stockUpdateResult = db.prepare(`
+              UPDATE products
+              SET stock_units = stock_units - ?,
+                  status = CASE WHEN stock_units - ? <= 0 THEN 'out_of_stock' ELSE status END,
+                  updated_at = ?
+              WHERE id = ? AND stock_units >= ?
+            `).run(item.pQty, item.pQty, createdAt, item.pId, item.pQty);
+
+            if (stockUpdateResult.changes === 0) {
+              throw new Error(`Inventario insuficiente al confirmar compra para el amigurumi "${item.pName}".`);
+            }
+          }
+        }
+
         const insertItem = db.prepare(`
           INSERT INTO order_items (id, order_id, product_id, product_name, price, quantity, image_url)
           VALUES (?, ?, ?, ?, ?, ?, ?)
         `);
 
-        for (const item of items) {
+        for (const item of verifiedItems) {
           const itemId = `item-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
-          const pId = item.product?.id || item.productId || 'ami-custom';
-          const pName = item.product?.name || item.productName || 'Figura artesanal';
-          const pPrice = typeof item.product?.price === 'number' ? item.product.price : (item.price || 0);
-          const pQty = item.quantity || 1;
-          const pImg = item.product?.imageUrl || item.imageUrl || '';
-
           insertItem.run(
             itemId,
             orderId,
-            pId,
-            pName,
-            pPrice,
-            pQty,
-            pImg
+            item.pId,
+            item.pName,
+            item.pPrice,
+            item.pQty,
+            item.pImg
           );
         }
       });
@@ -1441,6 +1497,15 @@ async function startServer() {
         LIMIT 5
       `).all() as any[];
 
+      const productsStat = db.prepare(`
+        SELECT 
+          COUNT(*) as total_products,
+          COALESCE(SUM(CASE WHEN status = 'published' THEN 1 ELSE 0 END), 0) as published_products,
+          COALESCE(SUM(stock_units), 0) as total_units,
+          COALESCE(SUM(stock_units * price), 0) as inventory_value
+        FROM products
+      `).get() as any;
+
       return res.json({
         overview: {
           totalOrders: ordersStat?.total_orders || 0,
@@ -1454,6 +1519,10 @@ async function startServer() {
           btlGamesPlayed: (btlStat?.total_games || 0) + btlSessionsCount,
           btlVictories: btlStat?.total_victories || 0,
           btlWoolCollected: btlStat?.total_wool || 0,
+          totalProducts: productsStat?.total_products || 0,
+          publishedProducts: productsStat?.published_products || 0,
+          totalInventoryUnits: productsStat?.total_units || 0,
+          inventoryValue: productsStat?.inventory_value || 0,
         },
         recentOrders,
       });
@@ -2131,6 +2200,486 @@ async function startServer() {
     }
   });
 
+  // ----------------------------------------------------
+  // ADMIN PRODUCTS & CATALOG MANAGEMENT (FASE 2F.5)
+  // ----------------------------------------------------
+
+  // GET /api/admin/products - Listar productos con filtros y métricas completas para el panel
+  app.get('/api/admin/products', requireAdmin, (req, res) => {
+    try {
+      const { search, category, status, sort, page = '1', limit = '50' } = req.query;
+      let query = 'SELECT * FROM products WHERE 1=1';
+      const params: any[] = [];
+
+      if (category && typeof category === 'string' && category !== 'todos') {
+        query += ' AND category = ?';
+        params.push(category.trim().toLowerCase());
+      }
+
+      if (status && typeof status === 'string' && status !== 'todos') {
+        query += ' AND status = ?';
+        params.push(status.trim().toLowerCase());
+      }
+
+      if (search && typeof search === 'string' && search.trim()) {
+        query += ' AND (name LIKE ? OR sku LIKE ? OR short_description LIKE ? OR tags LIKE ?)';
+        const term = `%${search.trim()}%`;
+        params.push(term, term, term, term);
+      }
+
+      if (sort === 'price-asc') {
+        query += ' ORDER BY price ASC';
+      } else if (sort === 'price-desc') {
+        query += ' ORDER BY price DESC';
+      } else if (sort === 'stock-asc') {
+        query += ' ORDER BY stock_units ASC';
+      } else if (sort === 'stock-desc') {
+        query += ' ORDER BY stock_units DESC';
+      } else if (sort === 'name-asc') {
+        query += ' ORDER BY name ASC';
+      } else {
+        query += ' ORDER BY featured DESC, datetime(created_at) DESC';
+      }
+
+      const rows = db.prepare(query).all(...params) as any[];
+      const total = rows.length;
+
+      const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
+      const limitNum = Math.max(1, parseInt(limit as string, 10) || 50);
+      const start = (pageNum - 1) * limitNum;
+      const paginatedRows = rows.slice(start, start + limitNum);
+
+      const products = paginatedRows.map(formatDbProduct);
+
+      // Métricas de inventario para el encabezado del panel
+      const totalInventoryUnits = rows.reduce((acc, r) => acc + (r.stock_units || 0), 0);
+      const totalInventoryValue = rows.reduce((acc, r) => acc + (r.stock_units || 0) * (r.price || 0), 0);
+      const countPublished = rows.filter((r) => r.status === 'published').length;
+      const countHidden = rows.filter((r) => r.status === 'hidden').length;
+      const countOutOfStock = rows.filter((r) => r.status === 'out_of_stock' || r.stock_units <= 0).length;
+
+      return res.json({
+        products,
+        total,
+        page: pageNum,
+        limit: limitNum,
+        metrics: {
+          totalProducts: total,
+          published: countPublished,
+          hidden: countHidden,
+          outOfStock: countOutOfStock,
+          totalUnits: totalInventoryUnits,
+          inventoryValue: totalInventoryValue,
+        },
+      });
+    } catch (err: any) {
+      console.error('Error in /api/admin/products:', err);
+      return res.status(500).json({ error: 'Error al consultar productos administrativos.' });
+    }
+  });
+
+  // GET /api/admin/products/:id - Detalle de un producto para edición administrativa
+  app.get('/api/admin/products/:id', requireAdmin, (req, res) => {
+    try {
+      const { id } = req.params;
+      const row = db.prepare('SELECT * FROM products WHERE id = ? OR sku = ?').get(id, id) as any;
+      if (!row) {
+        return res.status(404).json({ error: 'Producto no encontrado.' });
+      }
+      return res.json({ product: formatDbProduct(row) });
+    } catch (err: any) {
+      console.error('Error fetching admin product by id:', err);
+      return res.status(500).json({ error: 'Error al consultar el producto.' });
+    }
+  });
+
+  // POST /api/admin/products - Crear un nuevo amigurumi artesanal
+  app.post('/api/admin/products', requireAdmin, (req, res) => {
+    try {
+      const {
+        name,
+        sku,
+        category,
+        shortDescription,
+        fullDescription,
+        price,
+        stockUnits = 0,
+        lowStockThreshold = 3,
+        status = 'published',
+        heightCm,
+        widthCm,
+        depthCm,
+        craftTimeHours,
+        difficulty = 'Intermedia',
+        weaveType,
+        materials,
+        colors,
+        careInstructions,
+        notes,
+        imageUrl,
+        additionalImages,
+        tags,
+        featured = false,
+      } = req.body;
+
+      if (!name || typeof name !== 'string' || !name.trim()) {
+        return res.status(400).json({ error: 'El nombre del amigurumi es obligatorio.' });
+      }
+
+      if (!category || typeof category !== 'string' || !category.trim()) {
+        return res.status(400).json({ error: 'La categoría del amigurumi es obligatoria.' });
+      }
+
+      const numPrice = Number(price);
+      if (isNaN(numPrice) || numPrice <= 0) {
+        return res.status(400).json({ error: 'El precio debe ser un número mayor a 0 COP.' });
+      }
+
+      const numStock = Number(stockUnits);
+      if (isNaN(numStock) || numStock < 0 || !Number.isInteger(numStock)) {
+        return res.status(400).json({ error: 'El inventario debe ser un número entero mayor o igual a 0.' });
+      }
+
+      const numThreshold = Number(lowStockThreshold);
+      const safeThreshold = isNaN(numThreshold) || numThreshold < 0 ? 3 : numThreshold;
+
+      // Generar o validar SKU único
+      let safeSku = sku && typeof sku === 'string' ? sku.trim().toUpperCase() : '';
+      if (!safeSku) {
+        safeSku = `AMI-${Date.now().toString(36).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`;
+      }
+
+      const existingSku = db.prepare('SELECT id FROM products WHERE sku = ?').get(safeSku) as any;
+      if (existingSku) {
+        return res.status(409).json({ error: `El código SKU "${safeSku}" ya se encuentra registrado.` });
+      }
+
+      const productId = `ami-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+      const nowIso = new Date().toISOString();
+
+      let safeStatus = status;
+      if (!['published', 'hidden', 'out_of_stock'].includes(safeStatus)) {
+        safeStatus = 'published';
+      }
+      if (numStock === 0 && safeStatus === 'published') {
+        safeStatus = 'out_of_stock';
+      }
+
+      const materialsJson = JSON.stringify(Array.isArray(materials) ? materials : (materials ? [materials] : []));
+      const additionalImagesJson = JSON.stringify(Array.isArray(additionalImages) ? additionalImages : []);
+      const tagsJson = JSON.stringify(Array.isArray(tags) ? tags : (tags ? [tags] : []));
+
+      db.prepare(`
+        INSERT INTO products (
+          id, sku, name, category, short_description, full_description, price, currency,
+          stock_units, low_stock_threshold, status, height_cm, width_cm, depth_cm,
+          craft_time_hours, difficulty, weave_type, materials, colors, care_instructions,
+          notes, image_url, additional_images, tags, featured, created_at, updated_at
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?, ?, 'COP',
+          ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?, ?
+        )
+      `).run(
+        productId,
+        safeSku,
+        name.trim(),
+        category.trim().toLowerCase(),
+        (shortDescription || '').trim(),
+        (fullDescription || shortDescription || '').trim(),
+        Math.round(numPrice),
+        numStock,
+        safeThreshold,
+        safeStatus,
+        heightCm ? Number(heightCm) : null,
+        widthCm ? Number(widthCm) : null,
+        depthCm ? Number(depthCm) : null,
+        craftTimeHours ? Number(craftTimeHours) : 6,
+        (difficulty || 'Intermedia').trim(),
+        (weaveType || 'Punto bajo en espiral continua').trim(),
+        materialsJson,
+        (colors || '').trim(),
+        (careInstructions || 'Lavar a mano con agua fría y secar a la sombra.').trim(),
+        (notes || '').trim(),
+        imageUrl || '/src/assets/images/hero_amigurumi_showcase_1794329731742.jpg',
+        additionalImagesJson,
+        tagsJson,
+        featured ? 1 : 0,
+        nowIso,
+        nowIso
+      );
+
+      const created = db.prepare('SELECT * FROM products WHERE id = ?').get(productId) as any;
+      console.log(`[CATALOG] Nuevo amigurumi creado: "${created.name}" (SKU: ${created.sku}, Stock: ${created.stock_units})`);
+
+      return res.status(201).json({
+        success: true,
+        product: formatDbProduct(created),
+        message: 'Amigurumi creado exitosamente en el catálogo.',
+      });
+    } catch (err: any) {
+      console.error('Error creating product:', err);
+      return res.status(500).json({ error: 'Error al registrar el producto en la base de datos.' });
+    }
+  });
+
+  // PATCH /api/admin/products/:id - Actualización completa de datos artesanales e inventario
+  app.patch('/api/admin/products/:id', requireAdmin, (req, res) => {
+    try {
+      const { id } = req.params;
+      const product = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as any;
+      if (!product) {
+        return res.status(404).json({ error: 'Producto no encontrado.' });
+      }
+
+      const body = req.body;
+      const nowIso = new Date().toISOString();
+
+      // Verificar unicidad de SKU si se cambia
+      let newSku = product.sku;
+      if (body.sku && typeof body.sku === 'string' && body.sku.trim().toUpperCase() !== product.sku) {
+        newSku = body.sku.trim().toUpperCase();
+        const clash = db.prepare('SELECT id FROM products WHERE sku = ? AND id != ?').get(newSku, id) as any;
+        if (clash) {
+          return res.status(409).json({ error: `El código SKU "${newSku}" ya pertenece a otro amigurumi.` });
+        }
+      }
+
+      let updatedPrice = product.price;
+      if (body.price !== undefined) {
+        const p = Number(body.price);
+        if (isNaN(p) || p <= 0) {
+          return res.status(400).json({ error: 'El precio debe ser un número mayor a 0 COP.' });
+        }
+        updatedPrice = Math.round(p);
+      }
+
+      let updatedStock = product.stock_units;
+      if (body.stockUnits !== undefined) {
+        const s = Number(body.stockUnits);
+        if (isNaN(s) || s < 0 || !Number.isInteger(s)) {
+          return res.status(400).json({ error: 'El inventario debe ser un entero mayor o igual a 0.' });
+        }
+        updatedStock = s;
+      }
+
+      let updatedStatus = product.status;
+      if (body.status !== undefined && ['published', 'hidden', 'out_of_stock'].includes(body.status)) {
+        updatedStatus = body.status;
+      }
+      if (updatedStock === 0 && updatedStatus === 'published') {
+        updatedStatus = 'out_of_stock';
+      } else if (updatedStock > 0 && updatedStatus === 'out_of_stock' && body.status === undefined) {
+        updatedStatus = 'published';
+      }
+
+      const updatedName = body.name !== undefined ? String(body.name).trim() : product.name;
+      const updatedCat = body.category !== undefined ? String(body.category).trim().toLowerCase() : product.category;
+      const updatedShortDesc = body.shortDescription !== undefined ? String(body.shortDescription).trim() : product.short_description;
+      const updatedFullDesc = body.fullDescription !== undefined ? String(body.fullDescription).trim() : product.full_description;
+      const updatedThreshold = body.lowStockThreshold !== undefined ? Math.max(0, Number(body.lowStockThreshold)) : product.low_stock_threshold;
+      const updatedHeight = body.heightCm !== undefined ? (body.heightCm ? Number(body.heightCm) : null) : product.height_cm;
+      const updatedWidth = body.widthCm !== undefined ? (body.widthCm ? Number(body.widthCm) : null) : product.width_cm;
+      const updatedDepth = body.depthCm !== undefined ? (body.depthCm ? Number(body.depthCm) : null) : product.depth_cm;
+      const updatedCraftTime = body.craftTimeHours !== undefined ? Number(body.craftTimeHours) : product.craft_time_hours;
+      const updatedDifficulty = body.difficulty !== undefined ? String(body.difficulty).trim() : product.difficulty;
+      const updatedWeaveType = body.weaveType !== undefined ? String(body.weaveType).trim() : product.weave_type;
+      const updatedColors = body.colors !== undefined ? String(body.colors).trim() : product.colors;
+      const updatedCare = body.careInstructions !== undefined ? String(body.careInstructions).trim() : product.care_instructions;
+      const updatedNotes = body.notes !== undefined ? String(body.notes).trim() : product.notes;
+      const updatedImage = body.imageUrl !== undefined ? String(body.imageUrl).trim() : product.image_url;
+      const updatedFeatured = body.featured !== undefined ? (body.featured ? 1 : 0) : product.featured;
+
+      let updatedMaterials = product.materials;
+      if (body.materials !== undefined) {
+        updatedMaterials = JSON.stringify(Array.isArray(body.materials) ? body.materials : [body.materials]);
+      }
+
+      let updatedAdditionalImages = product.additional_images;
+      if (body.additionalImages !== undefined) {
+        updatedAdditionalImages = JSON.stringify(Array.isArray(body.additionalImages) ? body.additionalImages : []);
+      }
+
+      let updatedTags = product.tags;
+      if (body.tags !== undefined) {
+        updatedTags = JSON.stringify(Array.isArray(body.tags) ? body.tags : [body.tags]);
+      }
+
+      db.prepare(`
+        UPDATE products SET
+          sku = ?, name = ?, category = ?, short_description = ?, full_description = ?,
+          price = ?, stock_units = ?, low_stock_threshold = ?, status = ?,
+          height_cm = ?, width_cm = ?, depth_cm = ?, craft_time_hours = ?,
+          difficulty = ?, weave_type = ?, materials = ?, colors = ?,
+          care_instructions = ?, notes = ?, image_url = ?, additional_images = ?,
+          tags = ?, featured = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        newSku,
+        updatedName,
+        updatedCat,
+        updatedShortDesc,
+        updatedFullDesc,
+        updatedPrice,
+        updatedStock,
+        updatedThreshold,
+        updatedStatus,
+        updatedHeight,
+        updatedWidth,
+        updatedDepth,
+        updatedCraftTime,
+        updatedDifficulty,
+        updatedWeaveType,
+        updatedMaterials,
+        updatedColors,
+        updatedCare,
+        updatedNotes,
+        updatedImage,
+        updatedAdditionalImages,
+        updatedTags,
+        updatedFeatured,
+        nowIso,
+        id
+      );
+
+      const updated = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as any;
+      console.log(`[CATALOG] Producto "${updated.name}" actualizado (Stock: ${updated.stock_units}, Precio: $${updated.price})`);
+
+      return res.json({
+        success: true,
+        product: formatDbProduct(updated),
+        message: 'Amigurumi actualizado correctamente.',
+      });
+    } catch (err: any) {
+      console.error('Error updating product:', err);
+      return res.status(500).json({ error: 'Error al actualizar producto.' });
+    }
+  });
+
+  // PATCH /api/admin/products/:id/status - Cambio rápido de estado (publicar/ocultar)
+  app.patch('/api/admin/products/:id/status', requireAdmin, (req, res) => {
+    try {
+      const { id } = req.params;
+      const { status } = req.body;
+
+      if (!status || !['published', 'hidden', 'out_of_stock'].includes(status)) {
+        return res.status(400).json({ error: 'Estado inválido. Opciones: published, hidden, out_of_stock.' });
+      }
+
+      const product = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as any;
+      if (!product) {
+        return res.status(404).json({ error: 'Producto no encontrado.' });
+      }
+
+      let targetStatus = status;
+      if (status === 'published' && product.stock_units <= 0) {
+        targetStatus = 'out_of_stock';
+      }
+
+      const nowIso = new Date().toISOString();
+      db.prepare('UPDATE products SET status = ?, updated_at = ? WHERE id = ?').run(targetStatus, nowIso, id);
+
+      const updated = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as any;
+      return res.json({
+        success: true,
+        product: formatDbProduct(updated),
+        message: `Estado del amigurumi actualizado a "${targetStatus}".`,
+      });
+    } catch (err: any) {
+      console.error('Error updating product status:', err);
+      return res.status(500).json({ error: 'Error al actualizar el estado del amigurumi.' });
+    }
+  });
+
+  // POST /api/admin/products/upload-image - Subida segura de fotografías artesanales
+  app.post('/api/admin/products/upload-image', requireAdmin, (req, res) => {
+    try {
+      const { fileData, fileName, mimeType } = req.body;
+
+      if (!fileData || typeof fileData !== 'string') {
+        return res.status(400).json({ error: 'Archivo de imagen requerido en base64.' });
+      }
+
+      const ALLOWED_MIMES: Record<string, string> = {
+        'image/jpeg': 'jpg',
+        'image/jpg': 'jpg',
+        'image/png': 'png',
+        'image/webp': 'webp',
+      };
+
+      const cleanMime = (mimeType || '').trim().toLowerCase();
+      const ext = ALLOWED_MIMES[cleanMime];
+      if (!ext) {
+        return res.status(400).json({
+          error: 'Formato no soportado. Se permiten únicamente imágenes JPEG, PNG o WebP.',
+        });
+      }
+
+      const base64Index = fileData.indexOf(';base64,');
+      const rawBase64 = base64Index !== -1 ? fileData.substring(base64Index + 8) : fileData;
+      const buffer = Buffer.from(rawBase64, 'base64');
+
+      const MAX_SIZE = 5 * 1024 * 1024;
+      if (buffer.length > MAX_SIZE) {
+        return res.status(400).json({
+          error: 'La imagen excede el límite máximo permitido de 5 MB.',
+        });
+      }
+
+      if (buffer.length < 12) {
+        return res.status(400).json({ error: 'Archivo de imagen dañado o incompleto.' });
+      }
+
+      let isValidMagic = false;
+      if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+        isValidMagic = true;
+      } else if (buffer[0] === 0x89 && buffer[1] === 0x4e && buffer[2] === 0x47 && buffer[3] === 0x0d) { // PNG standard magic: 89 50 4E 47 ('\x89PNG') -> byte[1] is 0x50 ('P')
+        isValidMagic = true;
+      } else if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+        isValidMagic = true;
+      } else if (
+        buffer.toString('utf-8', 0, 4) === 'RIFF' &&
+        buffer.toString('utf-8', 8, 12) === 'WEBP'
+      ) {
+        isValidMagic = true;
+      }
+
+      if (!isValidMagic) {
+        return res.status(400).json({
+          error: 'El contenido del archivo no coincide con una imagen válida (JPEG, PNG o WebP).',
+        });
+      }
+
+      const sanitizedBase = (fileName || 'amigurumi')
+        .replace(/[^a-zA-Z0-9_-]/g, '')
+        .substring(0, 20);
+      const safeFileName = `ami-${Date.now()}-${sanitizedBase || 'foto'}-${crypto.randomBytes(4).toString('hex')}.${ext}`;
+
+      const targetDir = path.resolve(process.cwd(), 'public', 'uploads');
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+      }
+
+      const filePath = path.join(targetDir, safeFileName);
+      fs.writeFileSync(filePath, buffer);
+
+      const publicUrl = `/uploads/${safeFileName}`;
+      console.log(`[UPLOADS] Fotografía guardada: ${publicUrl} (${buffer.length} bytes)`);
+
+      return res.status(201).json({
+        success: true,
+        url: publicUrl,
+        fileName: safeFileName,
+        size: buffer.length,
+        message: 'Fotografía artesanal subida exitosamente.',
+      });
+    } catch (err: any) {
+      console.error('Error uploading product image:', err);
+      return res.status(500).json({ error: 'Error al procesar y guardar la imagen.' });
+    }
+  });
+
   // 404 for unhandled API requests
   app.all('/api/*', (req, res) => {
     return res.status(404).json({ error: 'Ruta de API no encontrada.' });
@@ -2151,10 +2700,26 @@ async function startServer() {
   // Mount Vite middlewares in dev mode, or serve static build in production
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: false,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
+    app.use('*', async (req, res, next) => {
+      const url = req.originalUrl;
+      try {
+        let template = fs.readFileSync(path.resolve(__dirname, 'index.html'), 'utf-8');
+        template = await vite.transformIndexHtml(url, template);
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
+      } catch (e: any) {
+        if (vite && typeof vite.ssrFixStacktrace === 'function') {
+          vite.ssrFixStacktrace(e);
+        }
+        next(e);
+      }
+    });
   } else {
     app.use(express.static(path.resolve(__dirname, 'dist')));
     app.get('*', (req, res) => {

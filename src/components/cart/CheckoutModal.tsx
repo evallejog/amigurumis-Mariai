@@ -271,6 +271,7 @@ export const CheckoutModal: React.FC = () => {
       setLastOrder(orderData);
       setStep('confirmation');
       clearCart();
+      window.dispatchEvent(new Event('catalog_updated'));
     } catch (err: any) {
       setPaymentError(err.message || 'Error de conexión al registrar el pedido.');
     } finally {

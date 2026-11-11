@@ -1,9 +1,9 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { mockProducts } from '../../data/mockProducts';
 import { Product } from '../../types';
 import { ProductCard } from './ProductCard';
 import { ProductDetailModal } from './ProductDetailModal';
-import { Search, Sparkles } from 'lucide-react';
+import { Search, Sparkles, RefreshCw, AlertCircle } from 'lucide-react';
 import { CustomSortSelect, SortOptionValue } from './CustomSortSelect';
 
 interface CatalogSectionProps {
@@ -20,19 +20,56 @@ const CATEGORIES = [
 ];
 
 export const CatalogSection: React.FC<CatalogSectionProps> = ({ onInquireWhatsApp }) => {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState('todos');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'featured' | 'price-asc' | 'price-desc' | 'craft-time'>('featured');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
 
+  const fetchCatalogProducts = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const res = await fetch('/api/products');
+      if (!res.ok) {
+        throw new Error(`Error en el servidor: código ${res.status}`);
+      }
+      const data = await res.json();
+      if (Array.isArray(data.products) && data.products.length > 0) {
+        setProducts(data.products);
+      } else {
+        // Fallback a mockProducts si la base de datos no tiene filas
+        setProducts(mockProducts);
+      }
+    } catch (err: any) {
+      console.warn('[CATALOG] Error al cargar productos de SQLite, usando datos históricos de respaldo:', err);
+      setError('No se pudo conectar en vivo con el catálogo; mostrando colección local.');
+      setProducts(mockProducts);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchCatalogProducts();
+
+    // Permitir recarga suave si el administrador actualiza productos en otra pestaña
+    const handleCatalogRefresh = () => fetchCatalogProducts();
+    window.addEventListener('catalog_updated', handleCatalogRefresh);
+    return () => window.removeEventListener('catalog_updated', handleCatalogRefresh);
+  }, []);
+
   const filteredProducts = useMemo(() => {
-    return mockProducts
+    return products
       .filter((p) => {
         const matchesCategory = selectedCategory === 'todos' || p.category === selectedCategory;
         const matchesQuery =
           searchQuery.trim() === '' ||
           p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
           p.shortDescription.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          (p.sku && p.sku.toLowerCase().includes(searchQuery.toLowerCase())) ||
           p.tags.some((t) => t.toLowerCase().includes(searchQuery.toLowerCase()));
         return matchesCategory && matchesQuery;
       })
@@ -42,7 +79,7 @@ export const CatalogSection: React.FC<CatalogSectionProps> = ({ onInquireWhatsAp
         if (sortBy === 'craft-time') return (a.approxCraftTimeHours || 0) - (b.approxCraftTimeHours || 0);
         return (b.featured ? 1 : 0) - (a.featured ? 1 : 0);
       });
-  }, [selectedCategory, searchQuery, sortBy]);
+  }, [products, selectedCategory, searchQuery, sortBy]);
 
   return (
     <section id="catalogo" className="py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
@@ -63,9 +100,20 @@ export const CatalogSection: React.FC<CatalogSectionProps> = ({ onInquireWhatsAp
           </p>
         </div>
 
-        {/* Counter */}
-        <div className="text-xs text-stone-500 font-medium whitespace-nowrap">
-          Mostrando <strong className="text-stone-900 font-bold tabular-nums">{filteredProducts.length}</strong> modelos disponibles
+        {/* Counter & Live Refresh */}
+        <div className="flex items-center gap-3">
+          <div className="text-xs text-stone-500 font-medium whitespace-nowrap">
+            Mostrando <strong className="text-stone-900 font-bold tabular-nums">{filteredProducts.length}</strong> modelos disponibles
+          </div>
+          <button
+            onClick={() => fetchCatalogProducts()}
+            disabled={loading}
+            title="Sincronizar catálogo con base de datos"
+            className="p-1.5 rounded-xl bg-white/60 hover:bg-white text-stone-500 hover:text-stone-800 border border-stone-200/50 shadow-2xs transition-all cursor-pointer"
+            aria-label="Actualizar catálogo"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-amber-700' : ''}`} />
+          </button>
         </div>
       </div>
 
