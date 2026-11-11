@@ -385,10 +385,14 @@ async function startServer() {
       }
 
       const normalizedCode = code.trim().toUpperCase();
-      const coupon = db.prepare('SELECT * FROM coupons WHERE code = ? AND is_active = 1').get(normalizedCode) as any;
+      const coupon = db.prepare('SELECT * FROM coupons WHERE code = ?').get(normalizedCode) as any;
 
       if (!coupon) {
-        return res.status(404).json({ valid: false, error: 'El cupón ingresado no existe o no se encuentra activo.' });
+        return res.status(404).json({ valid: false, error: 'El cupón ingresado no existe.' });
+      }
+
+      if (coupon.is_active !== 1) {
+        return res.status(400).json({ valid: false, error: 'Este cupón de descuento se encuentra inactivo.' });
       }
 
       // Check expiration if set
@@ -403,14 +407,34 @@ async function startServer() {
       if (coupon.max_uses && coupon.times_used >= coupon.max_uses) {
         return res.status(400).json({
           valid: false,
-          error: 'Este cupón ya ha sido utilizado en una compra anterior.',
+          error: 'Este cupón ya ha alcanzado su límite de usos redimidos.',
         });
+      }
+
+      // Check exclusivity (target_type === 'exclusive' or user_id or user_email)
+      const isExclusive = coupon.target_type === 'exclusive' || Boolean(coupon.user_id) || Boolean(coupon.user_email);
+      if (isExclusive) {
+        const authUser = getAuthUser(req);
+        if (!authUser) {
+          return res.status(403).json({
+            valid: false,
+            error: 'Este cupón es exclusivo y requiere iniciar sesión con la cuenta destinataria para aplicarse.',
+          });
+        }
+        const matchesId = coupon.user_id && authUser.id === coupon.user_id;
+        const matchesEmail = coupon.user_email && authUser.email.toLowerCase() === coupon.user_email.toLowerCase();
+        if (!matchesId && !matchesEmail) {
+          return res.status(403).json({
+            valid: false,
+            error: 'Este cupón de descuento está asignado a otra cuenta y no puede ser redimido por tu usuario.',
+          });
+        }
       }
 
       const orderSubtotal = typeof subtotal === 'number' && subtotal > 0 ? subtotal : 0;
       const discountPercent = coupon.discount_percent;
       const discountAmount = Math.round(orderSubtotal * (discountPercent / 100));
-      const description = coupon.description || `Descuento BTL del ${discountPercent}%`;
+      const description = coupon.description || `Descuento del ${discountPercent}%`;
 
       // Return both top-level and nested `coupon` object to guarantee dual client compatibility
       return res.json({
@@ -419,11 +443,15 @@ async function startServer() {
         discountPercent,
         discountAmount,
         description,
+        isExclusive,
+        expiresAt: coupon.expires_at,
         coupon: {
           code: coupon.code,
           discountPercent,
           discountAmount,
           description,
+          isExclusive,
+          expiresAt: coupon.expires_at,
         },
       });
     } catch (err: any) {
@@ -475,6 +503,7 @@ async function startServer() {
       const percent = levelNum === 1 ? 5 : levelNum === 2 ? 10 : 15;
       const authUser = getAuthUser(req);
       const userId = authUser?.id || null;
+      const userEmail = authUser?.email || null;
 
       // 3. Control de duplicados por finalización de nivel (Idempotencia estricta)
       // Si la sesión ya obtuvo recompensa para este nivel:
@@ -491,10 +520,16 @@ async function startServer() {
             error: 'La recompensa para esta finalización de nivel ya fue reclamada y utilizada en una compra.',
           });
         }
+        // If current user is logged in and coupon had no user assigned, link it
+        if (userId && !existingSessionCoupon.user_id) {
+          db.prepare('UPDATE coupons SET user_id = ?, user_email = ?, target_type = ? WHERE code = ?')
+            .run(userId, userEmail, 'exclusive', existingSessionCoupon.code);
+        }
         return res.json({
           success: true,
           code: existingSessionCoupon.code,
           discountPercent: existingSessionCoupon.discount_percent,
+          expiresAt: existingSessionCoupon.expires_at,
           message: `¡Cupón ${existingSessionCoupon.code} (${existingSessionCoupon.discount_percent}% OFF) listo para usar!`,
         });
       }
@@ -512,6 +547,7 @@ async function startServer() {
             success: true,
             code: existingUserCoupon.code,
             discountPercent: existingUserCoupon.discount_percent,
+            expiresAt: existingUserCoupon.expires_at,
             message: `¡Cupón ${existingUserCoupon.code} (${existingUserCoupon.discount_percent}% OFF) listo para usar!`,
           });
         }
@@ -525,19 +561,26 @@ async function startServer() {
         attempts++;
       }
 
-      const nowIso = new Date().toISOString();
+      const now = Date.now();
+      const nowIso = new Date(now).toISOString();
+      const expiresIso = new Date(now + 60 * 24 * 60 * 60 * 1000).toISOString(); // 60 días
+      const targetType = userId ? 'exclusive' : 'general';
+
       db.prepare(`
         INSERT INTO coupons (
-          code, discount_percent, level_required, max_uses, times_used,
-          is_active, description, user_id, session_id, created_at
-        ) VALUES (?, ?, ?, 1, 0, 1, ?, ?, ?, ?)
+          code, discount_percent, coupon_type, target_type, level_required, max_uses, times_used,
+          is_active, description, user_id, user_email, session_id, expires_at, created_at
+        ) VALUES (?, ?, 'btl', ?, ?, 1, 0, 1, ?, ?, ?, ?, ?, ?)
       `).run(
         generatedCode,
         percent,
+        targetType,
         levelNum,
         `Cupón BTL ${percent}% OFF único desbloqueado en Nivel 0${levelNum} de Pompón`,
         userId,
+        userEmail,
         cleanSessionId,
+        expiresIso,
         nowIso
       );
 
@@ -545,7 +588,11 @@ async function startServer() {
         success: true,
         code: generatedCode,
         discountPercent: percent,
-        message: `¡Cupón exclusivo ${generatedCode} activado exitosamente!`,
+        expiresAt: expiresIso,
+        targetType,
+        message: userId
+          ? `¡Cupón exclusivo ${generatedCode} vinculado a tu cuenta exitosamente!`
+          : `¡Cupón ${generatedCode} generado exitosamente!`,
       });
     } catch (err: any) {
       console.error('Error generating btl reward coupon:', err);
@@ -587,24 +634,49 @@ async function startServer() {
         shippingMethod === 'express' ? 18000 : shippingMethod === 'pickup' ? 0 : 12000;
 
       // Validación autoritativa de cupón en el servidor
+      // Validación autoritativa de cupón en el servidor
       let serverDiscount = 0;
       let appliedCouponCode: string | null = null;
 
       if (couponCode && typeof couponCode === 'string' && couponCode.trim()) {
         const normalizedCode = couponCode.trim().toUpperCase();
-        const coupon = db.prepare('SELECT * FROM coupons WHERE code = ? AND is_active = 1').get(normalizedCode) as any;
+        const coupon = db.prepare('SELECT * FROM coupons WHERE code = ?').get(normalizedCode) as any;
 
-        if (coupon) {
-          const notExpired = !coupon.expires_at || new Date(coupon.expires_at).getTime() > Date.now();
-          const notMaxed = !coupon.max_uses || coupon.times_used < coupon.max_uses;
+        if (!coupon) {
+          return res.status(400).json({ error: 'El cupón de descuento especificado no existe.' });
+        }
 
-          if (notExpired && notMaxed) {
-            appliedCouponCode = coupon.code;
-            serverDiscount = Math.round(calculatedSubtotal * (coupon.discount_percent / 100));
-            // Asegurar que el descuento nunca exceda el subtotal (no números negativos)
-            serverDiscount = Math.min(serverDiscount, calculatedSubtotal);
+        if (coupon.is_active !== 1) {
+          return res.status(400).json({ error: 'El cupón de descuento ingresado se encuentra inactivo.' });
+        }
+
+        if (coupon.expires_at && new Date(coupon.expires_at).getTime() < Date.now()) {
+          return res.status(400).json({ error: 'El cupón de descuento ha expirado.' });
+        }
+
+        if (coupon.max_uses && coupon.times_used >= coupon.max_uses) {
+          return res.status(400).json({ error: 'El cupón ya ha alcanzado su límite de usos redimidos.' });
+        }
+
+        // Validación estricta de exclusividad de usuario
+        const isExclusive = coupon.target_type === 'exclusive' || Boolean(coupon.user_id) || Boolean(coupon.user_email);
+        if (isExclusive) {
+          const matchesUserId = userId && coupon.user_id && userId === coupon.user_id;
+          const matchesUserEmail = coupon.user_email && (
+            (authUser?.email && authUser.email.toLowerCase() === coupon.user_email.toLowerCase()) ||
+            (customer?.email && customer.email.toLowerCase() === coupon.user_email.toLowerCase())
+          );
+
+          if (!matchesUserId && !matchesUserEmail) {
+            return res.status(403).json({
+              error: 'Este cupón de descuento es exclusivo de otro cliente y no puede ser redimido con esta orden.',
+            });
           }
         }
+
+        appliedCouponCode = coupon.code;
+        serverDiscount = Math.round(calculatedSubtotal * (coupon.discount_percent / 100));
+        serverDiscount = Math.min(serverDiscount, calculatedSubtotal);
       }
 
       const calculatedTotal = Math.max(0, calculatedSubtotal - serverDiscount) + validShippingCost;
@@ -646,7 +718,15 @@ async function startServer() {
         );
 
         if (appliedCouponCode) {
-          db.prepare('UPDATE coupons SET times_used = times_used + 1 WHERE code = ?').run(appliedCouponCode);
+          const updateResult = db.prepare(`
+            UPDATE coupons 
+            SET times_used = times_used + 1 
+            WHERE code = ? AND is_active = 1 AND (max_uses IS NULL OR times_used < max_uses)
+          `).run(appliedCouponCode);
+
+          if (updateResult.changes === 0) {
+            throw new Error('El cupón no pudo ser redimido (límite de usos alcanzado o cupón inactivo en concurrencia).');
+          }
         }
 
         const insertItem = db.prepare(`
@@ -771,6 +851,107 @@ async function startServer() {
     } catch (err: any) {
       console.error('Error fetching my-orders:', err);
       return res.status(500).json({ error: 'Error al consultar historial de pedidos.' });
+    }
+  });
+
+  // GET /api/user/coupons - Obtiene cupones personales/exclusivos y cupones comerciales generales vigentes para el cliente
+  app.get('/api/user/coupons', (req, res) => {
+    try {
+      const authUser = getAuthUser(req);
+      if (!authUser) {
+        return res.status(401).json({ error: 'Debes iniciar sesión para consultar tus cupones.' });
+      }
+
+      const personalCoupons = db.prepare(`
+        SELECT 
+          code, discount_percent as discountPercent, coupon_type as couponType,
+          target_type as targetType, level_required as levelRequired,
+          max_uses as maxUses, times_used as timesUsed,
+          expires_at as expiresAt, is_active as isActive, description, created_at as createdAt
+        FROM coupons
+        WHERE (user_id = ? OR (user_email IS NOT NULL AND lower(user_email) = lower(?)))
+        ORDER BY datetime(created_at) DESC
+      `).all(authUser.id, authUser.email);
+
+      const generalCoupons = db.prepare(`
+        SELECT 
+          code, discount_percent as discountPercent, coupon_type as couponType,
+          target_type as targetType, level_required as levelRequired,
+          max_uses as maxUses, times_used as timesUsed,
+          expires_at as expiresAt, is_active as isActive, description, created_at as createdAt
+        FROM coupons
+        WHERE (target_type = 'general' OR target_type IS NULL)
+          AND (user_id IS NULL)
+          AND is_active = 1
+          AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))
+          AND (max_uses IS NULL OR times_used < max_uses)
+        ORDER BY discount_percent DESC
+      `).all();
+
+      return res.json({
+        personalCoupons,
+        generalCoupons,
+      });
+    } catch (err: any) {
+      console.error('Error fetching user coupons:', err);
+      return res.status(500).json({ error: 'Error al consultar cupones del usuario.' });
+    }
+  });
+
+  // POST /api/btl/claim-guest-reward - Permite a un usuario autenticado reclamar a su cuenta un cupón BTL generado como invitado
+  app.post('/api/btl/claim-guest-reward', (req, res) => {
+    try {
+      const authUser = getAuthUser(req);
+      if (!authUser) {
+        return res.status(401).json({ error: 'Debes iniciar sesión para vincular la recompensa a tu cuenta.' });
+      }
+
+      const { code, sessionId } = req.body;
+      if (!code || typeof code !== 'string') {
+        return res.status(400).json({ error: 'Código de cupón requerido.' });
+      }
+
+      const normalizedCode = code.trim().toUpperCase();
+      const coupon = db.prepare('SELECT * FROM coupons WHERE code = ?').get(normalizedCode) as any;
+
+      if (!coupon) {
+        return res.status(404).json({ error: 'El cupón no fue encontrado.' });
+      }
+
+      const isBtl = coupon.coupon_type === 'btl' || normalizedCode.startsWith('MARIAI-') || normalizedCode.startsWith('POMPON');
+      if (!isBtl) {
+        return res.status(400).json({ error: 'Solo se pueden reclamar cupones de recompensa BTL.' });
+      }
+
+      if (coupon.user_id && coupon.user_id !== authUser.id) {
+        return res.status(409).json({ error: 'Este cupón ya ha sido asignado a otra cuenta de usuario.' });
+      }
+
+      if (coupon.times_used > 0) {
+        return res.status(400).json({ error: 'Este cupón ya ha sido utilizado en una compra anterior.' });
+      }
+
+      db.prepare(`
+        UPDATE coupons
+        SET user_id = ?, user_email = ?, target_type = 'exclusive'
+        WHERE code = ?
+      `).run(authUser.id, authUser.email, normalizedCode);
+
+      return res.json({
+        success: true,
+        message: `¡Cupón ${normalizedCode} vinculado exitosamente a tu cuenta (${authUser.email})!`,
+        coupon: {
+          code: normalizedCode,
+          discountPercent: coupon.discount_percent,
+          expiresAt: coupon.expires_at,
+          description: coupon.description,
+          targetType: 'exclusive',
+          userEmail: authUser.email,
+        },
+      });
+    } catch (err: any) {
+      console.error('Error claiming guest reward:', err);
+      return res.status(500).json({ error: 'Error vinculando recompensa de invitado.' });
     }
   });
 
@@ -1424,28 +1605,97 @@ async function startServer() {
     }
   });
 
-  // GET /api/admin/coupons - Listado de cupones distinguiendo comerciales y BTL
+  // GET /api/admin/coupons - Listado de cupones con categorización (BTL, Comercial General, Comercial Exclusivo), filtros y paginación
   app.get('/api/admin/coupons', requireAdmin, (req, res) => {
     try {
-      const coupons = db.prepare(`
-        SELECT 
-          code, discount_percent, coupon_type, level_required, max_uses, times_used,
-          is_active, description, user_id, session_id, created_at, expires_at
-        FROM coupons
-        ORDER BY datetime(created_at) DESC
-      `).all();
+      const { type, status, search, page: pageQuery, limit: limitQuery } = req.query;
 
-      return res.json({ coupons });
+      const whereClauses: string[] = ['1=1'];
+      const params: any[] = [];
+
+      // Filter by type
+      if (type && type !== 'all') {
+        if (type === 'btl') {
+          whereClauses.push("(c.coupon_type = 'btl' OR c.code LIKE 'MARIAI-%')");
+        } else if (type === 'commercial_general') {
+          whereClauses.push("(c.coupon_type = 'commercial_general' OR (c.coupon_type = 'commercial' AND (c.target_type = 'general' OR c.target_type IS NULL)))");
+        } else if (type === 'commercial_exclusive') {
+          whereClauses.push("(c.coupon_type = 'commercial_exclusive' OR (c.coupon_type = 'commercial' AND c.target_type = 'exclusive'))");
+        }
+      }
+
+      // Filter by status
+      if (status && status !== 'all') {
+        if (status === 'active') {
+          whereClauses.push('c.is_active = 1');
+        } else if (status === 'inactive') {
+          whereClauses.push('c.is_active = 0');
+        }
+      }
+
+      // Filter by search
+      if (search && typeof search === 'string' && search.trim()) {
+        const term = `%${search.trim().toLowerCase()}%`;
+        whereClauses.push('(lower(c.code) LIKE ? OR lower(c.description) LIKE ? OR lower(COALESCE(c.user_email, \'\')) LIKE ? OR lower(COALESCE(u.name, \'\')) LIKE ? OR lower(COALESCE(u.email, \'\')) LIKE ?)');
+        params.push(term, term, term, term, term);
+      }
+
+      const whereSql = whereClauses.join(' AND ');
+
+      // Total count
+      const countRow = db.prepare(`
+        SELECT COUNT(*) as count 
+        FROM coupons c 
+        LEFT JOIN users u ON (c.user_id = u.id OR (c.user_email IS NOT NULL AND lower(c.user_email) = lower(u.email)))
+        WHERE ${whereSql}
+      `).get(...params) as any;
+      const total = countRow?.count || 0;
+
+      const isPaginated = pageQuery !== undefined || limitQuery !== undefined;
+      const page = Math.max(1, parseInt(pageQuery as string, 10) || 1);
+      const limit = Math.max(1, parseInt(limitQuery as string, 10) || 20);
+      const offset = (page - 1) * limit;
+
+      let couponsQuery = `
+        SELECT 
+          c.code, c.discount_percent, c.coupon_type, c.target_type, c.level_required,
+          c.max_uses, c.times_used, c.is_active, c.description, c.user_id, c.user_email,
+          c.session_id, c.created_at, c.expires_at,
+          u.name as owner_name, COALESCE(c.user_email, u.email) as owner_email
+        FROM coupons c
+        LEFT JOIN users u ON (c.user_id = u.id OR (c.user_email IS NOT NULL AND lower(c.user_email) = lower(u.email)))
+        WHERE ${whereSql}
+        ORDER BY datetime(c.created_at) DESC
+      `;
+
+      let coupons: any[];
+      if (isPaginated) {
+        coupons = db.prepare(`${couponsQuery} LIMIT ? OFFSET ?`).all(...params, limit, offset);
+      } else {
+        coupons = db.prepare(couponsQuery).all(...params);
+      }
+
+      const totalPages = Math.ceil(total / limit) || 1;
+
+      return res.json({
+        coupons,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages,
+        },
+      });
     } catch (err: any) {
       console.error('Error fetching admin coupons:', err);
       return res.status(500).json({ error: 'Error al consultar cupones.' });
     }
   });
 
-  // POST /api/admin/coupons - Creación de cupón comercial por el administrador (Fase 2F.2)
+  // POST /api/admin/coupons - Creación de cupón comercial (General o Exclusivo para cliente específico)
   app.post('/api/admin/coupons', requireAdmin, (req, res) => {
     try {
-      const { code, discountPercent, maxUses, expiresAt, description, isActive } = req.body;
+      const { code, discountPercent, maxUses, expiresAt, description, isActive, targetType, userId } = req.body;
 
       if (!code || typeof code !== 'string') {
         return res.status(400).json({ error: 'El código de cupón es obligatorio.' });
@@ -1479,8 +1729,29 @@ async function startServer() {
         return res.status(400).json({ error: 'El porcentaje de descuento debe ser un número entero entre 1% y 90%.' });
       }
 
+      // Manejo de Destinatario: General vs Exclusivo
+      const cleanTargetType = targetType === 'exclusive' ? 'exclusive' : 'general';
+      let targetUserId: string | null = null;
+      let targetUserEmail: string | null = null;
+      let targetUserName: string | null = null;
+      let couponType = cleanTargetType === 'exclusive' ? 'commercial_exclusive' : 'commercial_general';
+
+      if (cleanTargetType === 'exclusive') {
+        if (!userId || typeof userId !== 'string' || !userId.trim()) {
+          return res.status(400).json({ error: 'Para cupones exclusivos es obligatorio seleccionar un cliente registrado.' });
+        }
+        const userRow = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(userId.trim()) as any;
+        if (!userRow) {
+          return res.status(400).json({ error: 'El usuario destinatario especificado no existe en el sistema.' });
+        }
+        targetUserId = userRow.id;
+        targetUserEmail = userRow.email;
+        targetUserName = userRow.name;
+      }
+
       // Validación de límite de usos
-      const maxUsesNum = maxUses !== undefined && maxUses !== null ? Number(maxUses) : 9999;
+      const defaultUses = cleanTargetType === 'exclusive' ? 1 : 9999;
+      const maxUsesNum = maxUses !== undefined && maxUses !== null && maxUses !== '' ? Number(maxUses) : defaultUses;
       if (isNaN(maxUsesNum) || maxUsesNum < 1) {
         return res.status(400).json({ error: 'El límite de usos debe ser un número entero positivo mayor a cero.' });
       }
@@ -1500,39 +1771,62 @@ async function startServer() {
 
       const nowIso = new Date().toISOString();
       const activeFlag = isActive === false || isActive === 0 ? 0 : 1;
-      const cleanDesc = description && typeof description === 'string' ? description.trim() : `Cupón Comercial ${discountNum}% OFF`;
+      const cleanDesc = description && typeof description === 'string' && description.trim()
+        ? description.trim()
+        : cleanTargetType === 'exclusive'
+        ? `Cupón Exclusivo ${discountNum}% OFF para ${targetUserName || targetUserEmail}`
+        : `Cupón Comercial General ${discountNum}% OFF`;
 
       db.prepare(`
         INSERT INTO coupons (
-          code, discount_percent, coupon_type, level_required, max_uses, times_used,
-          expires_at, is_active, description, created_at
-        ) VALUES (?, ?, 'commercial', NULL, ?, 0, ?, ?, ?, ?)
+          code, discount_percent, coupon_type, target_type, level_required, max_uses, times_used,
+          expires_at, is_active, description, user_id, user_email, created_at
+        ) VALUES (?, ?, ?, ?, NULL, ?, 0, ?, ?, ?, ?, ?, ?)
       `).run(
         normalizedCode,
         discountNum,
+        couponType,
+        cleanTargetType,
         maxUsesNum,
         parsedExpiresAt,
         activeFlag,
         cleanDesc,
+        targetUserId,
+        targetUserEmail,
         nowIso
       );
 
-      console.log(`[AUDIT] Cupón comercial "${normalizedCode}" (${discountNum}% OFF) creado exitosamente por admin`);
+      console.log(`[AUDIT] Cupón comercial "${normalizedCode}" (${couponType}, ${discountNum}% OFF) creado exitosamente por admin`);
 
       return res.status(201).json({
         success: true,
         coupon: {
           code: normalizedCode,
+          discount_percent: discountNum,
           discountPercent: discountNum,
-          couponType: 'commercial',
+          coupon_type: couponType,
+          couponType: couponType,
+          target_type: cleanTargetType,
+          targetType: cleanTargetType,
+          user_id: targetUserId,
+          userId: targetUserId,
+          user_email: targetUserEmail,
+          userEmail: targetUserEmail,
+          owner_name: targetUserName,
+          owner_email: targetUserEmail,
+          max_uses: maxUsesNum,
           maxUses: maxUsesNum,
+          times_used: 0,
           timesUsed: 0,
+          expires_at: parsedExpiresAt,
           expiresAt: parsedExpiresAt,
+          is_active: activeFlag,
           isActive: activeFlag === 1,
           description: cleanDesc,
+          created_at: nowIso,
           createdAt: nowIso,
         },
-        message: `Cupón comercial "${normalizedCode}" creado exitosamente.`,
+        message: `Cupón "${normalizedCode}" (${cleanTargetType === 'exclusive' ? 'Exclusivo' : 'General'}) creado exitosamente.`,
       });
     } catch (err: any) {
       console.error('Error creating commercial coupon:', err);
@@ -1540,7 +1834,7 @@ async function startServer() {
     }
   });
 
-  // PATCH /api/admin/coupons/:code - Activar/desactivar y actualizar cupón (Fase 2F.2)
+  // PATCH /api/admin/coupons/:code - Activar/desactivar y actualizar cupón (Fase 2F.2 / 2F.3)
   app.patch('/api/admin/coupons/:code', requireAdmin, (req, res) => {
     try {
       const { code } = req.params;
@@ -1557,9 +1851,23 @@ async function startServer() {
 
       // Regla 10: Evitar que la edición administrativa altere las reglas o porcentaje de cupones BTL ya emitidos
       if (isBtlCoupon && discountPercent !== undefined && Number(discountPercent) !== coupon.discount_percent) {
-        return res.status(400).json({
+        return res.status(403).json({
           error: 'No está permitido modificar el porcentaje de descuento de cupones emitidos por el videojuego BTL.',
         });
+      }
+
+      // Validación estricta para activación: no permitir activar cupón vencido o con usos agotados
+      if (isActive !== undefined && (isActive === true || isActive === 1)) {
+        if (coupon.expires_at && new Date(coupon.expires_at).getTime() < Date.now()) {
+          return res.status(400).json({
+            error: 'No es posible activar un cupón cuya fecha de expiración ya ha vencido. Actualiza la fecha de vencimiento primero.',
+          });
+        }
+        if (coupon.max_uses && coupon.times_used >= coupon.max_uses) {
+          return res.status(400).json({
+            error: 'No es posible activar un cupón que ya ha alcanzado su límite de usos redimidos.',
+          });
+        }
       }
 
       let updatedActive = coupon.is_active;
@@ -1627,11 +1935,23 @@ async function startServer() {
         success: true,
         coupon: {
           code: normalizedCode,
+          discount_percent: updatedDiscount,
           discountPercent: updatedDiscount,
-          couponType: coupon.coupon_type || 'commercial',
+          coupon_type: coupon.coupon_type || 'commercial_general',
+          couponType: coupon.coupon_type || 'commercial_general',
+          target_type: coupon.target_type || 'general',
+          targetType: coupon.target_type || 'general',
+          user_id: coupon.user_id,
+          userId: coupon.user_id,
+          user_email: coupon.user_email,
+          userEmail: coupon.user_email,
+          max_uses: updatedMaxUses,
           maxUses: updatedMaxUses,
+          times_used: coupon.times_used,
           timesUsed: coupon.times_used,
+          is_active: updatedActive,
           isActive: updatedActive === 1,
+          expires_at: updatedExpiresAt,
           expiresAt: updatedExpiresAt,
           description: updatedDesc,
         },

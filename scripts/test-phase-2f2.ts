@@ -5,6 +5,9 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import crypto from 'crypto';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const DB_PATH = path.join(process.cwd(), 'data', 'amigurumis_mariai.db');
 const db = new Database(DB_PATH);
@@ -45,8 +48,10 @@ async function runTestSuite() {
 
   // 1. Authenticated admin login
   console.log('\n--- 1. Pruebas de Autenticación y Autorización RBAC ---');
-  const adminToken = await login('admin.demo@amigurumismariai.test', 'AdminDemo2026!');
-  assert(Boolean(adminToken), '1. Login de cuenta administradora activa (admin.demo)');
+  const adminEmail = 'admin@amigurumismariai.com';
+  const adminPassword = process.env.ADMIN_PASSWORD || 'MariaiAdmin2026!#Sec';
+  const adminToken = await login(adminEmail, adminPassword);
+  assert(Boolean(adminToken), '1. Login de cuenta administradora activa (admin@amigurumismariai.com)');
 
   const resAdminMe = await fetch(`${BASE_URL}/api/admin/me`, {
     headers: { Authorization: `Bearer ${adminToken}` },
@@ -56,7 +61,7 @@ async function runTestSuite() {
   assert(adminMeData.user?.role === 'admin', '3. Rol de usuario en /api/admin/me es "admin"');
 
   // Customer authorization (403)
-  const custToken = await login('maria@amigurumismariai.com', 'Amigurumi2026*');
+  const custToken = await login('maria@amigurumismariai.com', 'Mariai2026!');
   assert(Boolean(custToken), '4. Login de cliente estándar de demostración (maria@amigurumismariai.com)');
 
   const resCustAdminMe = await fetch(`${BASE_URL}/api/admin/me`, {
@@ -147,7 +152,7 @@ async function runTestSuite() {
   assert(resHistory.status === 200, '12. GET /api/admin/orders/:id/history retorna HTTP 200');
   const historyData = await resHistory.json();
   assert(Array.isArray(historyData.history) && historyData.history.length === 3, '13. Tabla order_status_history contiene exactamente los 3 registros auditados');
-  assert(historyData.history[0]?.admin_email === 'admin.demo@amigurumismariai.test', '14. Registro de auditoría identifica correctamente el correo del administrador ejecutante');
+  assert(historyData.history[0]?.admin_email === adminEmail, '14. Registro de auditoría identifica correctamente el correo del administrador ejecutante (admin@amigurumismariai.com)');
 
   // 3. Commercial Coupon Management
   console.log('\n--- 3. Pruebas de Gestión de Cupones Comerciales y Protección BTL ---');

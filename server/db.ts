@@ -159,7 +159,7 @@ export function initDatabase() {
     db.prepare('ALTER TABLE orders ADD COLUMN is_simulated INTEGER DEFAULT 1').run();
   } catch {}
 
-  // Migrate coupons table to add user_id, session_id and coupon_type for commercial vs BTL tracking
+  // Migrate coupons table to add user_id, session_id, coupon_type, user_email and target_type
   try {
     db.prepare('ALTER TABLE coupons ADD COLUMN user_id TEXT').run();
   } catch {}
@@ -167,17 +167,46 @@ export function initDatabase() {
     db.prepare('ALTER TABLE coupons ADD COLUMN session_id TEXT').run();
   } catch {}
   try {
-    db.prepare("ALTER TABLE coupons ADD COLUMN coupon_type TEXT DEFAULT 'commercial'").run();
+    db.prepare("ALTER TABLE coupons ADD COLUMN coupon_type TEXT DEFAULT 'commercial_general'").run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE coupons ADD COLUMN user_email TEXT').run();
+  } catch {}
+  try {
+    db.prepare("ALTER TABLE coupons ADD COLUMN target_type TEXT DEFAULT 'general'").run();
+  } catch {}
+  try {
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_coupons_user_id ON coupons(user_id)').run();
+  } catch {}
+  try {
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_coupons_code ON coupons(code)').run();
   } catch {}
 
-  // Mark all BTL coupons as coupon_type = 'btl'
+  // Classify existing coupons properly:
+  // MARIAI-* are individual BTL rewards
   try {
     db.prepare(`
       UPDATE coupons 
-      SET coupon_type = 'btl' 
-      WHERE level_required IS NOT NULL 
-         OR code LIKE 'MARIAI-%' 
-         OR code LIKE 'POMPON%'
+      SET coupon_type = 'btl', target_type = 'exclusive'
+      WHERE code LIKE 'MARIAI-%'
+    `).run();
+  } catch {}
+
+  // POMPON* are general legacy promotional codes
+  try {
+    db.prepare(`
+      UPDATE coupons 
+      SET coupon_type = 'commercial_general', target_type = 'general'
+      WHERE code LIKE 'POMPON%'
+    `).run();
+  } catch {}
+
+  // Backfill user_email for any coupons with user_id that have missing user_email
+  try {
+    db.prepare(`
+      UPDATE coupons
+      SET user_email = (SELECT email FROM users WHERE users.id = coupons.user_id)
+      WHERE user_id IS NOT NULL AND (user_email IS NULL OR user_email = '')
     `).run();
   } catch {}
 
@@ -266,6 +295,14 @@ export function initDatabase() {
     );
   }
 
+  // Aprovisionamiento seguro e idempotente de la cuenta administrativa principal en desarrollo si ADMIN_PASSWORD está configurada
+  if (process.env.ADMIN_PASSWORD && process.env.ADMIN_PASSWORD.trim().length >= 6) {
+    const res = provisionMainAdmin();
+    if (res.created) {
+      console.log(`[AUTH] ${res.message} (admin@amigurumismariai.com)`);
+    }
+  }
+
   console.log('SQLite database initialized successfully at:', dbPath);
 }
 
@@ -290,6 +327,60 @@ export function verifyPassword(password: string, storedHash: string): boolean {
 // Generates a cryptographically strong access token for orders and sessions
 export function generateOrderAccessToken(): string {
   return `ord_sec_${crypto.randomBytes(24).toString('hex')}`;
+}
+
+// Aprovisionamiento seguro e idempotente de la cuenta administrativa principal (admin@amigurumismariai.com)
+export function provisionMainAdmin(customPassword?: string): { success: boolean; created: boolean; message: string } {
+  const adminEmail = 'admin@amigurumismariai.com';
+  const rawPassword = customPassword || process.env.ADMIN_PASSWORD;
+
+  const existing = db.prepare('SELECT id, name, email, role FROM users WHERE email = ?').get(adminEmail) as any;
+
+  if (existing) {
+    if (customPassword && customPassword.trim().length >= 6) {
+      const passwordHash = hashPassword(customPassword.trim());
+      db.prepare("UPDATE users SET password_hash = ?, role = 'admin', name = 'Administrador Mariai' WHERE email = ?").run(passwordHash, adminEmail);
+      return { success: true, created: false, message: 'Contraseña de la cuenta administrativa principal actualizada exitosamente.' };
+    }
+    return { success: true, created: false, message: 'La cuenta administrativa principal ya existe. Sus credenciales se preservaron sin cambios.' };
+  }
+
+  if (!rawPassword || rawPassword.trim().length < 6) {
+    return {
+      success: false,
+      created: false,
+      message: 'No se suministró contraseña para la cuenta administrativa (mínimo 6 caracteres). Configura ADMIN_PASSWORD en .env o pásala al comando CLI.',
+    };
+  }
+
+  const passwordHash = hashPassword(rawPassword.trim());
+  const userId = `usr-admin-${Date.now().toString(36)}`;
+  const nowIso = new Date().toISOString();
+
+  db.prepare(`
+    INSERT INTO users (id, name, email, password_hash, provider, role, created_at)
+    VALUES (?, 'Administrador Mariai', ?, ?, 'local', 'admin', ?)
+  `).run(userId, adminEmail, passwordHash, nowIso);
+
+  return { success: true, created: true, message: 'Cuenta administrativa principal aprovisionada exitosamente.' };
+}
+
+// Revocación y eliminación segura de la cuenta de demostración anterior
+export function removeAdminDemo(): { success: boolean; message: string } {
+  const DEMO_EMAIL = 'admin.demo@amigurumismariai.test';
+  const user = db.prepare('SELECT id FROM users WHERE email = ?').get(DEMO_EMAIL) as any;
+
+  if (!user) {
+    return { success: true, message: `La cuenta ${DEMO_EMAIL} no existe en la base de datos.` };
+  }
+
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
+  const info = db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
+
+  if (info.changes > 0) {
+    return { success: true, message: `Cuenta de demostración ${DEMO_EMAIL} y sus sesiones han sido revocadas y eliminadas de forma segura.` };
+  }
+  return { success: false, message: 'No se pudo eliminar la cuenta demo.' };
 }
 
 // Checks if external Turso database is configured via environment variables
@@ -335,6 +426,7 @@ export function exportDatabaseDump(): {
     'coupons',
     'game_sessions',
     'btl_sessions',
+    'order_status_history',
   ];
 
   const dump: Record<string, any[]> = {};
@@ -385,8 +477,8 @@ export function importDatabaseDump(dump: { tables: Record<string, any[]> }): {
     coupons: (r) =>
       db
         .prepare(`
-        INSERT OR IGNORE INTO coupons (code, discount_percent, level_required, max_uses, times_used, expires_at, is_active, description, user_id, session_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR IGNORE INTO coupons (code, discount_percent, level_required, max_uses, times_used, expires_at, is_active, description, user_id, session_id, user_email, coupon_type, target_type, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
         .run(
           r.code,
@@ -399,6 +491,9 @@ export function importDatabaseDump(dump: { tables: Record<string, any[]> }): {
           r.description,
           r.user_id,
           r.session_id,
+          r.user_email || null,
+          r.coupon_type || 'commercial_general',
+          r.target_type || 'general',
           r.created_at
         ),
     orders: (r) =>
@@ -465,6 +560,13 @@ export function importDatabaseDump(dump: { tables: Record<string, any[]> }): {
           r.reward_proposed,
           r.created_at
         ),
+    order_status_history: (r) =>
+      db
+        .prepare(`
+        INSERT OR IGNORE INTO order_status_history (id, order_id, previous_status, new_status, admin_id, admin_email, notes, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+        .run(r.id, r.order_id, r.previous_status, r.new_status, r.admin_id, r.admin_email, r.notes || '', r.created_at),
   };
 
   for (const [table, rows] of Object.entries(dump.tables)) {
@@ -607,6 +709,20 @@ export async function syncToTurso(): Promise<{
       );
     `);
 
+    await client.execute(`
+      CREATE TABLE IF NOT EXISTS order_status_history (
+        id TEXT PRIMARY KEY,
+        order_id TEXT NOT NULL,
+        previous_status TEXT NOT NULL,
+        new_status TEXT NOT NULL,
+        admin_id TEXT NOT NULL,
+        admin_email TEXT NOT NULL,
+        notes TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+      );
+    `);
+
     return {
       success: true,
       message: 'Esquema sincronizado exitosamente con Turso Cloud.',
@@ -618,6 +734,7 @@ export async function syncToTurso(): Promise<{
         'coupons',
         'btl_sessions',
         'game_sessions',
+        'order_status_history',
       ],
     };
   } catch (err: any) {

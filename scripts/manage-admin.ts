@@ -1,10 +1,18 @@
 #!/usr/bin/env node
 /**
- * Herramienta de mantenimiento y aprovisionamiento seguro de administradores
- * Plataforma: Amigurumis Mariai (Fase 2F.1)
+ * Herramienta de mantenimiento y aprovisionamiento seguro de cuentas administrativas
+ * Plataforma: Amigurumis Mariai
  *
- * Uso manual en terminal:
+ * Cuenta Administrativa Principal Oficial:
+ *   - Email: admin@amigurumismariai.com
+ *   - Nombre: Administrador Mariai
+ *   - Rol: admin
+ *
+ * Uso en terminal:
  *   npx tsx scripts/manage-admin.ts list
+ *   npx tsx scripts/manage-admin.ts provision-admin [contraseña]
+ *   npx tsx scripts/manage-admin.ts reset-admin-password <nueva_contraseña>
+ *   npx tsx scripts/manage-admin.ts revoke-demo
  *   npx tsx scripts/manage-admin.ts promote <correo_usuario>
  *   npx tsx scripts/manage-admin.ts demote <correo_usuario>
  */
@@ -14,6 +22,7 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
+import readline from 'readline';
 
 dotenv.config();
 
@@ -30,12 +39,26 @@ db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
 const command = process.argv[2];
-const targetEmailOrPassword = process.argv[3];
+const arg1 = process.argv[3];
 
 function hashPassword(password: string): string {
   const salt = crypto.randomBytes(16).toString('hex');
   const hash = crypto.scryptSync(password, salt, 64).toString('hex');
   return `${salt}:${hash}`;
+}
+
+async function promptPassword(promptText: string): Promise<string> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise((resolve) => {
+    rl.question(promptText, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
 }
 
 function listUsers() {
@@ -62,6 +85,94 @@ function listUsers() {
   console.log(`Total usuarios: ${users.length}\n`);
 }
 
+// Aprovisionamiento seguro e idempotente de la cuenta administrativa principal
+async function provisionMainAdmin(customPassword?: string, forceUpdate: boolean = false) {
+  const ADMIN_EMAIL = 'admin@amigurumismariai.com';
+  const ADMIN_NAME = 'Administrador Mariai';
+
+  const existing = db.prepare('SELECT id, name, email, role FROM users WHERE email = ?').get(ADMIN_EMAIL) as any;
+
+  if (existing && !forceUpdate && !customPassword) {
+    console.log(`[INFO] La cuenta administrativa principal "${ADMIN_EMAIL}" ya existe con rol "${existing.role}".`);
+    console.log('Por política de seguridad idempotente, sus credenciales y estado se preservaron sin alteraciones.');
+    console.log('Para actualizar su contraseña de forma explícita, ejecuta:');
+    console.log('  npx tsx scripts/manage-admin.ts reset-admin-password <nueva_contraseña>\n');
+    return;
+  }
+
+  let rawPassword = customPassword || process.env.ADMIN_PASSWORD;
+
+  if (!rawPassword && process.stdin.isTTY) {
+    console.log(`\n[APROVISIONAMIENTO INTERACTIVO] Cuenta: ${ADMIN_EMAIL}`);
+    rawPassword = await promptPassword('Ingresa la contraseña para la cuenta administrativa (mínimo 6 caracteres): ');
+  }
+
+  if (!rawPassword || rawPassword.trim().length < 6) {
+    console.warn(`
+[AVISO DE SEGURIDAD]
+Para aprovisionar la cuenta administrativa "${ADMIN_EMAIL}" sin exponer contraseñas en el código fuente,
+debes suministrar la contraseña de una de las siguientes formas seguras:
+
+1. Configurando ADMIN_PASSWORD en el archivo no versionado .env:
+   ADMIN_PASSWORD=<tu_clave_privada>
+   Y luego ejecutar:
+   npx tsx scripts/manage-admin.ts provision-admin
+
+2. Pasándola como argumento en la terminal:
+   npx tsx scripts/manage-admin.ts provision-admin <tu_clave_privada>
+
+3. De forma interactiva si se ejecuta en una terminal interactiva (TTY).
+
+No se creará una cuenta con contraseña vacía o menor a 6 caracteres.
+`);
+    process.exit(1);
+  }
+
+  const cleanPassword = rawPassword.trim();
+  const passwordHash = hashPassword(cleanPassword);
+  const nowIso = new Date().toISOString();
+
+  if (existing) {
+    db.prepare(`
+      UPDATE users
+      SET name = ?, password_hash = ?, role = 'admin'
+      WHERE email = ?
+    `).run(ADMIN_NAME, passwordHash, ADMIN_EMAIL);
+    console.log(`[ÉXITO] Contraseña y rol de la cuenta administrativa "${ADMIN_EMAIL}" actualizados exitosamente.`);
+  } else {
+    const userId = `usr-admin-${Date.now().toString(36)}`;
+    db.prepare(`
+      INSERT INTO users (id, name, email, password_hash, provider, role, created_at)
+      VALUES (?, ?, ?, ?, 'local', 'admin', ?)
+    `).run(userId, ADMIN_NAME, ADMIN_EMAIL, passwordHash, nowIso);
+    console.log(`[ÉXITO] Cuenta administrativa principal aprovisionada exitosamente:`);
+    console.log(`- ID: ${userId}`);
+    console.log(`- Nombre: ${ADMIN_NAME}`);
+    console.log(`- Correo: ${ADMIN_EMAIL}`);
+    console.log(`- Rol: admin`);
+  }
+
+  console.log('Credencial protegida con hash scrypt nativo (64 bytes). La contraseña no fue expuesta en logs ni versionada.\n');
+}
+
+// Revocación y eliminación segura de la cuenta demo anterior
+function revokeAdminDemo() {
+  const DEMO_EMAIL = 'admin.demo@amigurumismariai.test';
+  const user = db.prepare('SELECT id FROM users WHERE email = ?').get(DEMO_EMAIL) as any;
+
+  if (!user) {
+    console.log(`[INFO] La cuenta demo ${DEMO_EMAIL} no existe en la base de datos (ya se encontraba revocada).`);
+    return;
+  }
+
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
+  const info = db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
+
+  if (info.changes > 0) {
+    console.log(`[ÉXITO] Cuenta demo "${DEMO_EMAIL}" y sus sesiones han sido revocadas y eliminadas de forma segura de SQLite.\n`);
+  }
+}
+
 function promoteUser(email: string) {
   if (!email || !email.includes('@')) {
     console.error('[ERROR] Debes proporcionar un correo electrónico válido.');
@@ -70,6 +181,18 @@ function promoteUser(email: string) {
   }
 
   const normalizedEmail = email.trim().toLowerCase();
+
+  // Salvaguarda explícita: no utilizar el correo personal del propietario
+  if (normalizedEmail === 'charlesvalle2006@gmail.com') {
+    console.warn(`
+[AVISO DE POLÍTICA DE SEGURIDAD]
+Por directriz arquitectónica, el correo personal del propietario (${normalizedEmail})
+NO debe utilizarse como cuenta administrativa.
+Por favor utiliza la cuenta institucional oficial: "admin@amigurumismariai.com".
+`);
+    return;
+  }
+
   const user = db.prepare('SELECT id, name, email, role FROM users WHERE email = ?').get(normalizedEmail) as any;
 
   if (!user) {
@@ -95,10 +218,7 @@ function promoteUser(email: string) {
     console.log(`- Nombre: ${user.name}`);
     console.log(`- Correo: ${user.email}`);
     console.log(`- Rol anterior: ${user.role}`);
-    console.log(`- Nuevo rol: admin`);
-    console.log(`El usuario ahora tiene acceso autorizado a /admin y a los endpoints /api/admin/*.\n`);
-  } else {
-    console.error('[ERROR] No se pudo actualizar el rol del usuario.');
+    console.log(`- Nuevo rol: admin\n`);
   }
 }
 
@@ -133,103 +253,66 @@ function demoteUser(email: string) {
   }
 }
 
-// Fase 2F.1.2: Aprovisionamiento seguro de cuenta administrativa demo
-function provisionAdminDemo(customPassword?: string) {
-  const DEMO_EMAIL = 'admin.demo@amigurumismariai.test';
-  const rawPassword = customPassword || process.env.ADMIN_DEMO_PASSWORD;
+async function main() {
+  switch (command) {
+    case 'list':
+      listUsers();
+      break;
 
-  // Requisito 7: Si no hay contraseña configurada ni mecanismo de entrega confidencial fuera de banda,
-  // detener el aprovisionamiento antes de crear una cuenta inaccesible.
-  if (!rawPassword || rawPassword.trim().length < 6) {
-    console.warn(`
-[AVISO DE SEGURIDAD - FASE 2F.1.2 / REQUISITO 7]
-Google AI Studio no cuenta con un baúl de secretos (Secret Manager) con entrega ciega al cliente.
-Para evitar crear una cuenta administrativa huérfana e inaccesible, el aprovisionamiento requiere
-que la contraseña sea suministrada de forma privada mediante la variable de entorno ADMIN_DEMO_PASSWORD
-(en el archivo no versionado .env) o como argumento del comando CLI:
+    case 'provision-admin':
+    case 'provision':
+      await provisionMainAdmin(arg1, false);
+      break;
 
-  npx tsx scripts/manage-admin.ts provision-demo <contraseña_elegida>
-  O bien configurando ADMIN_DEMO_PASSWORD=<tu_clave> en .env
+    case 'reset-admin-password':
+    case 'update-admin-password':
+      if (!arg1) {
+        console.error('[ERROR] Debes indicar la nueva contraseña para admin@amigurumismariai.com');
+        console.log('Uso: npx tsx scripts/manage-admin.ts reset-admin-password <nueva_clave>');
+        process.exit(1);
+      }
+      await provisionMainAdmin(arg1, true);
+      break;
 
-No se creará una cuenta con contraseña desconocida ni predeterminada.
-`);
-    return;
-  }
+    case 'revoke-demo':
+    case 'remove-demo':
+      revokeAdminDemo();
+      break;
 
-  const passwordHash = hashPassword(rawPassword.trim());
-  const nowIso = new Date().toISOString();
+    case 'promote':
+      promoteUser(arg1);
+      break;
 
-  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(DEMO_EMAIL) as any;
+    case 'demote':
+      demoteUser(arg1);
+      break;
 
-  if (existing) {
-    db.prepare(`
-      UPDATE users
-      SET password_hash = ?, role = 'admin'
-      WHERE email = ?
-    `).run(passwordHash, DEMO_EMAIL);
-    console.log(`[ÉXITO] Cuenta administrativa demo actualizada: ${DEMO_EMAIL} con rol 'admin'.`);
-  } else {
-    const userId = `usr-admin-demo-${Date.now().toString(36)}`;
-    db.prepare(`
-      INSERT INTO users (id, name, email, password_hash, provider, role, created_at)
-      VALUES (?, 'Administrador Demo', ?, ?, 'local', 'admin', ?)
-    `).run(userId, DEMO_EMAIL, passwordHash, nowIso);
-    console.log(`[ÉXITO] Cuenta administrativa demo aprovisionada: ${DEMO_EMAIL} con rol 'admin'.`);
-  }
-  console.log('Credencial protegida con hash scrypt nativo. La contraseña no fue expuesta en logs ni versionada.');
-}
-
-// Fase 2F.1.2: Deshabilitación / Eliminación de cuenta demo para preparación a producción
-function removeAdminDemo() {
-  const DEMO_EMAIL = 'admin.demo@amigurumismariai.test';
-  const user = db.prepare('SELECT id FROM users WHERE email = ?').get(DEMO_EMAIL) as any;
-
-  if (!user) {
-    console.log(`[INFO] La cuenta demo ${DEMO_EMAIL} no existe en la base de datos.`);
-    return;
-  }
-
-  // Eliminar sesiones asociadas y el usuario demo exclusivamente
-  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
-  const info = db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
-
-  if (info.changes > 0) {
-    console.log(`[ÉXITO] Cuenta administrativa demo ${DEMO_EMAIL} eliminada de forma segura para producción.`);
-  }
-}
-
-switch (command) {
-  case 'list':
-    listUsers();
-    break;
-  case 'promote':
-    promoteUser(targetEmailOrPassword);
-    break;
-  case 'demote':
-    demoteUser(targetEmailOrPassword);
-    break;
-  case 'provision-demo':
-  case 'create-demo':
-    provisionAdminDemo(targetEmailOrPassword);
-    break;
-  case 'remove-demo':
-    removeAdminDemo();
-    break;
-  default:
-    console.log(`
+    default:
+      console.log(`
 === AMIGURUMIS MARIAI — GESTIÓN DE ROLES ADMINISTRATIVOS ===
-Herramienta segura de mantenimiento de cuentas sin contraseñas predeterminadas.
+Herramienta segura de mantenimiento de cuentas sin contraseñas fijas en código.
+
+Cuenta Administrativa Principal:
+  - Correo: admin@amigurumismariai.com
+  - Nombre: Administrador Mariai
+  - Rol: admin
 
 Comandos disponibles:
   npx tsx scripts/manage-admin.ts list
+  npx tsx scripts/manage-admin.ts provision-admin [contraseña]
+  npx tsx scripts/manage-admin.ts reset-admin-password <contraseña>
+  npx tsx scripts/manage-admin.ts revoke-demo
   npx tsx scripts/manage-admin.ts promote <email>
   npx tsx scripts/manage-admin.ts demote <email>
-  npx tsx scripts/manage-admin.ts provision-demo [password]
-  npx tsx scripts/manage-admin.ts remove-demo
 
-Ejemplo:
-  npx tsx scripts/manage-admin.ts promote maria@amigurumismariai.com
-  npx tsx scripts/manage-admin.ts provision-demo
+Variables de entorno admitidas en .env:
+  ADMIN_PASSWORD=<contraseña_privada>
 `);
-    break;
+      break;
+  }
 }
+
+main().catch((err) => {
+  console.error('Error fatal en manage-admin:', err);
+  process.exit(1);
+});

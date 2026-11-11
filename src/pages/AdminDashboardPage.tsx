@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   ShoppingBag,
   Users,
+  User,
   Tag,
   Gamepad2,
   BarChart3,
@@ -94,7 +95,8 @@ interface CustomerRecord {
 interface CouponRecord {
   code: string;
   discount_percent: number;
-  coupon_type?: 'commercial' | 'btl';
+  coupon_type?: 'commercial' | 'commercial_general' | 'commercial_exclusive' | 'btl';
+  target_type?: 'general' | 'exclusive';
   level_required?: number;
   max_uses: number;
   times_used: number;
@@ -102,6 +104,10 @@ interface CouponRecord {
   description?: string;
   created_at: string;
   expires_at?: string;
+  user_id?: string;
+  user_email?: string;
+  owner_name?: string;
+  owner_email?: string;
 }
 
 interface StatusHistoryRecord {
@@ -176,6 +182,14 @@ export const AdminDashboardPage: React.FC = () => {
 
   // Coupons table state
   const [coupons, setCoupons] = useState<CouponRecord[]>([]);
+  const [couponTypeFilter, setCouponTypeFilter] = useState<string>('all');
+  const [couponStatusFilter, setCouponStatusFilter] = useState<string>('all');
+  const [couponSearch, setCouponSearch] = useState<string>('');
+  const [couponPage, setCouponPage] = useState<number>(1);
+  const [couponTotalPages, setCouponTotalPages] = useState<number>(1);
+  const [couponTotalCount, setCouponTotalCount] = useState<number>(0);
+  const [customerOptions, setCustomerOptions] = useState<{ id: string; name: string; email: string }[]>([]);
+
   const [isCouponModalOpen, setIsCouponModalOpen] = useState<boolean>(false);
   const [couponForm, setCouponForm] = useState({
     code: '',
@@ -184,6 +198,8 @@ export const AdminDashboardPage: React.FC = () => {
     expiresAt: '',
     description: '',
     isActive: true,
+    targetType: 'general' as 'general' | 'exclusive',
+    userId: '',
   });
   const [isSubmittingCoupon, setIsSubmittingCoupon] = useState<boolean>(false);
   const [couponModalError, setCouponModalError] = useState<string | null>(null);
@@ -277,17 +293,49 @@ export const AdminDashboardPage: React.FC = () => {
     }
   };
 
-  const loadCoupons = async () => {
+  const loadCoupons = async (
+    page = couponPage,
+    type = couponTypeFilter,
+    status = couponStatusFilter,
+    search = couponSearch
+  ) => {
     try {
       setLoadingData(true);
-      const res = await fetch('/api/admin/coupons', { headers: getAuthHeaders() });
+      const query = new URLSearchParams({
+        page: page.toString(),
+        limit: '10',
+        ...(type !== 'all' ? { type } : {}),
+        ...(status !== 'all' ? { status } : {}),
+        ...(search.trim() ? { search: search.trim() } : {}),
+      });
+      const res = await fetch(`/api/admin/coupons?${query.toString()}`, { headers: getAuthHeaders() });
       if (!res.ok) throw new Error('Error al consultar cupones.');
       const data = await res.json();
       setCoupons(data.coupons || []);
+      if (data.pagination) {
+        setCouponPage(data.pagination.page);
+        setCouponTotalPages(data.pagination.totalPages);
+        setCouponTotalCount(data.pagination.total);
+      }
     } catch (err: any) {
       setErrorMessage(err.message);
     } finally {
       setLoadingData(false);
+    }
+  };
+
+  const handleOpenCreateCouponModal = async () => {
+    setCouponModalError(null);
+    setCouponModalSuccess(null);
+    setIsCouponModalOpen(true);
+    if (customerOptions.length === 0) {
+      try {
+        const res = await fetch('/api/admin/customers?limit=50', { headers: getAuthHeaders() });
+        if (res.ok) {
+          const data = await res.json();
+          setCustomerOptions((data.customers || []).map((c: any) => ({ id: c.id, name: c.name, email: c.email })));
+        }
+      } catch {}
     }
   };
 
@@ -375,6 +423,7 @@ export const AdminDashboardPage: React.FC = () => {
   // Toggle active/inactive for coupons
   const handleToggleCouponActive = async (coupon: CouponRecord) => {
     try {
+      setErrorMessage(null);
       const newStatus = coupon.is_active ? false : true;
       const res = await fetch(`/api/admin/coupons/${coupon.code}`, {
         method: 'PATCH',
@@ -388,12 +437,12 @@ export const AdminDashboardPage: React.FC = () => {
       });
       const data = await res.json();
       if (!res.ok) {
-        alert(data.error || 'No se pudo actualizar el cupón.');
+        setErrorMessage(data.error || 'No se pudo actualizar el cupón.');
         return;
       }
-      loadCoupons();
+      loadCoupons(couponPage, couponTypeFilter, couponStatusFilter, couponSearch);
     } catch (err: any) {
-      alert(err.message || 'Error de conexión.');
+      setErrorMessage(err.message || 'Error de conexión.');
     }
   };
 
@@ -406,6 +455,10 @@ export const AdminDashboardPage: React.FC = () => {
     setIsSubmittingCoupon(true);
 
     try {
+      if (couponForm.targetType === 'exclusive' && !couponForm.userId) {
+        throw new Error('Debes seleccionar un cliente registrado para emitir un cupón exclusivo.');
+      }
+
       const res = await fetch('/api/admin/coupons', {
         method: 'POST',
         headers: {
@@ -415,10 +468,12 @@ export const AdminDashboardPage: React.FC = () => {
         body: JSON.stringify({
           code: couponForm.code.trim().toUpperCase(),
           discountPercent: Number(couponForm.discountPercent),
-          maxUses: Number(couponForm.maxUses),
+          maxUses: couponForm.targetType === 'exclusive' ? (Number(couponForm.maxUses) || 1) : Number(couponForm.maxUses),
           expiresAt: couponForm.expiresAt ? new Date(couponForm.expiresAt).toISOString() : null,
           description: couponForm.description.trim(),
           isActive: couponForm.isActive,
+          targetType: couponForm.targetType,
+          userId: couponForm.targetType === 'exclusive' ? couponForm.userId : null,
         }),
       });
 
@@ -438,8 +493,10 @@ export const AdminDashboardPage: React.FC = () => {
           expiresAt: '',
           description: '',
           isActive: true,
+          targetType: 'general',
+          userId: '',
         });
-        loadCoupons();
+        loadCoupons(1, couponTypeFilter, couponStatusFilter, couponSearch);
       }, 1200);
     } catch (err: any) {
       setCouponModalError(err.message);
@@ -455,7 +512,7 @@ export const AdminDashboardPage: React.FC = () => {
     if (activeTab === 'overview') loadOverview();
     else if (activeTab === 'orders') loadOrders(1, orderStatusFilter, orderSearch, orderStartDate, orderEndDate);
     else if (activeTab === 'customers') loadCustomers(1, customerSearch, customerStartDate, customerEndDate);
-    else if (activeTab === 'coupons') loadCoupons();
+    else if (activeTab === 'coupons') loadCoupons(1, couponTypeFilter, couponStatusFilter, couponSearch);
     else if (activeTab === 'btl') loadBtl();
   }, [activeTab, isAuthenticated, user]);
 
@@ -523,10 +580,10 @@ export const AdminDashboardPage: React.FC = () => {
               <span>Aprovisionamiento Seguro</span>
             </p>
             <p className="text-amber-800 leading-relaxed">
-              Para promover una cuenta existente al rol de administrador, ejecuta en la terminal del servidor:
+              Inicia sesión con la cuenta administrativa institucional autorizada (<strong className="text-stone-900">admin@amigurumismariai.com</strong>). Para aprovisionar o gestionar credenciales en el servidor:
             </p>
             <code className="block mt-1.5 p-2 rounded-lg bg-white/90 border border-amber-200 font-mono text-[10px] text-stone-800 overflow-x-auto">
-              npx tsx scripts/manage-admin.ts promote {user?.email}
+              npx tsx scripts/manage-admin.ts provision-admin
             </code>
           </div>
           <div className="flex flex-col gap-2.5">
@@ -794,30 +851,30 @@ export const AdminDashboardPage: React.FC = () => {
                 <p className="text-xs text-stone-500 py-4 text-center">No hay pedidos recientes registrados.</p>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
+                  <table className="w-full text-left text-xs min-w-[650px]">
                     <thead>
                       <tr className="border-b border-stone-200/80 text-stone-500 font-bold">
-                        <th className="pb-2">N° Pedido</th>
-                        <th className="pb-2">Cliente</th>
-                        <th className="pb-2">Ciudad</th>
-                        <th className="pb-2">Total</th>
-                        <th className="pb-2">Estado</th>
-                        <th className="pb-2">Fecha</th>
+                        <th className="pb-2 whitespace-nowrap">N° Pedido</th>
+                        <th className="pb-2 whitespace-nowrap">Cliente</th>
+                        <th className="pb-2 whitespace-nowrap">Ciudad</th>
+                        <th className="pb-2 whitespace-nowrap">Total</th>
+                        <th className="pb-2 whitespace-nowrap">Estado</th>
+                        <th className="pb-2 whitespace-nowrap">Fecha</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-stone-100">
                       {recentOrders.map((ord) => (
                         <tr key={ord.id} className="hover:bg-amber-50/40">
-                          <td className="py-2.5 font-bold font-mono text-amber-950">{ord.order_number}</td>
-                          <td className="py-2.5">{ord.customer_name}</td>
-                          <td className="py-2.5 text-stone-600">{ord.customer_city || 'Bogotá D.C.'}</td>
-                          <td className="py-2.5 font-bold">{formatCOP(ord.total)}</td>
-                          <td className="py-2.5">
-                            <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 text-[10px] font-bold">
-                              {ord.status}
+                          <td className="py-2.5 font-bold font-mono text-amber-950 whitespace-nowrap">{ord.order_number}</td>
+                          <td className="py-2.5 whitespace-nowrap">{ord.customer_name}</td>
+                          <td className="py-2.5 text-stone-600 whitespace-nowrap">{ord.customer_city || 'Bogotá D.C.'}</td>
+                          <td className="py-2.5 font-bold whitespace-nowrap">{formatCOP(ord.total)}</td>
+                          <td className="py-2.5 whitespace-nowrap">
+                            <span className="inline-flex items-center justify-center px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-900 text-[10px] font-bold whitespace-nowrap shrink-0 border border-emerald-300">
+                              {ord.status.replace('_', ' ')}
                             </span>
                           </td>
-                          <td className="py-2.5 text-stone-500 text-[11px]">{ord.created_at?.split('T')[0]}</td>
+                          <td className="py-2.5 text-stone-500 text-[11px] whitespace-nowrap">{ord.created_at?.split('T')[0]}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -944,25 +1001,25 @@ export const AdminDashboardPage: React.FC = () => {
             {/* Orders Table */}
             <div className="rounded-3xl liquid-glass border border-white/80 shadow-xs bg-white/85 overflow-hidden">
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
+                <table className="w-full text-left text-xs min-w-[960px]">
                   <thead className="bg-stone-100/90 text-stone-600 font-bold border-b border-stone-200">
                     <tr>
-                      <th className="py-3 px-4">N° Pedido</th>
-                      <th className="py-3 px-4">Cliente</th>
-                      <th className="py-3 px-4">Ciudad</th>
-                      <th className="py-3 px-4">Envío</th>
-                      <th className="py-3 px-4">Cupón</th>
-                      <th className="py-3 px-4">Total</th>
-                      <th className="py-3 px-4">Estado</th>
-                      <th className="py-3 px-4">Fecha</th>
-                      <th className="py-3 px-4 text-center">Gestión Operativa</th>
+                      <th className="py-3 px-4 min-w-[130px] whitespace-nowrap">N° Pedido</th>
+                      <th className="py-3 px-4 min-w-[170px] whitespace-nowrap">Cliente</th>
+                      <th className="py-3 px-4 min-w-[110px] whitespace-nowrap">Ciudad</th>
+                      <th className="py-3 px-4 min-w-[100px] whitespace-nowrap">Envío</th>
+                      <th className="py-3 px-4 min-w-[110px] whitespace-nowrap">Cupón</th>
+                      <th className="py-3 px-4 min-w-[110px] whitespace-nowrap">Total</th>
+                      <th className="py-3 px-4 min-w-[150px] whitespace-nowrap">Estado</th>
+                      <th className="py-3 px-4 min-w-[105px] whitespace-nowrap">Fecha</th>
+                      <th className="py-3 px-4 min-w-[160px] whitespace-nowrap text-center">Gestión Operativa</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-stone-100">
                     {orders.length === 0 ? (
                       <tr>
                         <td colSpan={9} className="py-10 text-center text-stone-500">
-                          No se encontraron órdenes con los criterios especificados.
+                           No se encontraron órdenes con los criterios especificados.
                         </td>
                       </tr>
                     ) : (
@@ -970,33 +1027,33 @@ export const AdminDashboardPage: React.FC = () => {
                         const nextConfig = NEXT_ORDER_STATUS[ord.status];
                         return (
                           <tr key={ord.id} className="hover:bg-amber-50/30 transition-colors">
-                            <td className="py-3 px-4 font-bold font-mono text-amber-950">{ord.order_number}</td>
+                            <td className="py-3 px-4 font-bold font-mono text-amber-950 whitespace-nowrap">{ord.order_number}</td>
                             <td className="py-3 px-4">
                               <p className="font-bold text-stone-900">{ord.customer_name}</p>
                               <p className="text-[10px] text-stone-500 truncate max-w-[150px]">{ord.customer_email}</p>
                             </td>
-                            <td className="py-3 px-4 text-stone-700">{ord.customer_city || 'Bogotá D.C.'}</td>
-                            <td className="py-3 px-4 capitalize text-stone-600">{ord.shipping_method}</td>
-                            <td className="py-3 px-4">
+                            <td className="py-3 px-4 text-stone-700 whitespace-nowrap">{ord.customer_city || 'Bogotá D.C.'}</td>
+                            <td className="py-3 px-4 capitalize text-stone-600 whitespace-nowrap">{ord.shipping_method}</td>
+                            <td className="py-3 px-4 whitespace-nowrap">
                               {ord.coupon_code ? (
-                                <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 font-mono font-bold text-[10px]">
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 font-mono font-bold text-[10px] whitespace-nowrap shrink-0 border border-amber-300">
                                   {ord.coupon_code}
                                 </span>
                               ) : (
                                 <span className="text-stone-400 text-[10px]">—</span>
                               )}
                             </td>
-                            <td className="py-3 px-4 font-bold text-stone-900">{formatCOP(ord.total)}</td>
-                            <td className="py-3 px-4">
+                            <td className="py-3 px-4 font-bold text-stone-900 whitespace-nowrap">{formatCOP(ord.total)}</td>
+                            <td className="py-3 px-4 whitespace-nowrap">
                               <span
-                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                className={`inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap shrink-0 shadow-2xs ${
                                   ord.status === 'entregado'
                                     ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
                                     : ord.status === 'enviado'
                                     ? 'bg-blue-100 text-blue-900 border border-blue-300'
                                     : ord.status === 'en_preparacion'
                                     ? 'bg-amber-100 text-amber-900 border border-amber-300'
-                                    : 'bg-stone-200 text-stone-800'
+                                    : 'bg-stone-200 text-stone-800 border border-stone-300'
                                 }`}
                               >
                                 {ord.status.replace('_', ' ')}
@@ -1225,11 +1282,7 @@ export const AdminDashboardPage: React.FC = () => {
               </div>
 
               <button
-                onClick={() => {
-                  setCouponModalError(null);
-                  setCouponModalSuccess(null);
-                  setIsCouponModalOpen(true);
-                }}
+                onClick={handleOpenCreateCouponModal}
                 className="py-2.5 px-4 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs cursor-pointer transition-all shadow-xs flex items-center gap-2 shrink-0"
               >
                 <Plus className="w-4 h-4" />
@@ -1237,83 +1290,239 @@ export const AdminDashboardPage: React.FC = () => {
               </button>
             </div>
 
+            {/* Filter & Search Bar for Coupons */}
+            <div className="p-4 rounded-3xl liquid-glass border border-white/80 shadow-xs bg-white/80 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                  {[
+                    { id: 'all', label: 'Todos' },
+                    { id: 'btl', label: 'Recompensas BTL' },
+                    { id: 'commercial_general', label: 'Comercial General' },
+                    { id: 'commercial_exclusive', label: 'Exclusivo Cliente' },
+                  ].map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => {
+                        setCouponTypeFilter(t.id);
+                        loadCoupons(1, t.id, couponStatusFilter, couponSearch);
+                      }}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                        couponTypeFilter === t.id
+                          ? 'bg-stone-900 text-white shadow-xs'
+                          : 'bg-stone-200/70 text-stone-700 hover:bg-stone-300/60'
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="text-xs text-stone-500 font-semibold">
+                  Mostrando {coupons.length} de {couponTotalCount || coupons.length} cupones
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-2 border-t border-stone-200/60">
+                <div className="sm:col-span-6 relative">
+                  <Search className="w-3.5 h-3.5 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={couponSearch}
+                    onChange={(e) => setCouponSearch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        loadCoupons(1, couponTypeFilter, couponSearch, couponStatusFilter);
+                      }
+                    }}
+                    placeholder="Buscar por código, cliente o descripción..."
+                    className="w-full pl-9 pr-3 py-2 rounded-xl bg-white/90 border border-stone-200 text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  />
+                </div>
+
+                <div className="sm:col-span-4 flex items-center gap-1.5">
+                  <span className="text-[11px] font-bold text-stone-500 shrink-0">Estado:</span>
+                  <select
+                    value={couponStatusFilter}
+                    onChange={(e) => {
+                      setCouponStatusFilter(e.target.value);
+                      loadCoupons(1, couponTypeFilter, e.target.value, couponSearch);
+                    }}
+                    className="w-full py-1.5 px-2.5 rounded-xl bg-white/90 border border-stone-200 text-xs text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  >
+                    <option value="all">Todos los estados</option>
+                    <option value="active">Solo Activos</option>
+                    <option value="inactive">Solo Inactivos</option>
+                  </select>
+                </div>
+
+                <div className="sm:col-span-2 flex items-center gap-1">
+                  <button
+                    onClick={() => loadCoupons(1, couponTypeFilter, couponStatusFilter, couponSearch)}
+                    className="w-full py-2 px-3 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs cursor-pointer transition-colors shadow-xs flex items-center justify-center gap-1"
+                    title="Aplicar filtros"
+                  >
+                    <Filter className="w-3.5 h-3.5" />
+                    <span>Filtrar</span>
+                  </button>
+                  {(couponSearch || couponTypeFilter !== 'all' || couponStatusFilter !== 'all') && (
+                    <button
+                      onClick={() => {
+                        setCouponSearch('');
+                        setCouponTypeFilter('all');
+                        setCouponStatusFilter('all');
+                        loadCoupons(1, 'all', 'all', '');
+                      }}
+                      className="py-2 px-2.5 rounded-xl bg-stone-200 hover:bg-stone-300 text-stone-700 font-bold text-xs cursor-pointer transition-colors shrink-0"
+                      title="Limpiar filtros"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Coupons Table */}
             <div className="rounded-3xl liquid-glass border border-white/80 shadow-xs bg-white/85 overflow-hidden">
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
+                <table className="w-full text-left text-xs min-w-[1100px]">
                   <thead className="bg-stone-100/90 text-stone-600 font-bold border-b border-stone-200">
                     <tr>
-                      <th className="py-3 px-4">Código</th>
-                      <th className="py-3 px-4">Tipo</th>
-                      <th className="py-3 px-4">Descuento</th>
-                      <th className="py-3 px-4">Origen / Nivel</th>
-                      <th className="py-3 px-4">Usos / Límite</th>
-                      <th className="py-3 px-4">Vencimiento</th>
-                      <th className="py-3 px-4">Estado</th>
-                      <th className="py-3 px-4 text-center">Acción</th>
+                      <th className="py-3 px-4 min-w-[170px] whitespace-nowrap">Código</th>
+                      <th className="py-3 px-4 min-w-[160px] whitespace-nowrap">Tipo</th>
+                      <th className="py-3 px-4 min-w-[190px] whitespace-nowrap">Destinatario / Cliente</th>
+                      <th className="py-3 px-4 min-w-[110px] whitespace-nowrap">Descuento</th>
+                      <th className="py-3 px-4 min-w-[130px] whitespace-nowrap">Origen / Nivel</th>
+                      <th className="py-3 px-4 min-w-[110px] whitespace-nowrap">Usos / Límite</th>
+                      <th className="py-3 px-4 min-w-[120px] whitespace-nowrap">Vencimiento</th>
+                      <th className="py-3 px-4 min-w-[110px] whitespace-nowrap">Estado</th>
+                      <th className="py-3 px-4 min-w-[110px] whitespace-nowrap text-center">Acción</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-stone-100">
-                    {coupons.map((c) => {
-                      const isBtl = c.coupon_type === 'btl' || c.code.startsWith('MARIAI-') || c.code.startsWith('POMPON');
-                      return (
-                        <tr key={c.code} className="hover:bg-amber-50/30 transition-colors">
-                          <td className="py-3 px-4">
-                            <span className="font-mono font-bold text-stone-900 block">{c.code}</span>
-                            <span className="text-[10px] text-stone-500 truncate max-w-[180px] block">{c.description}</span>
-                          </td>
-                          <td className="py-3 px-4">
-                            {isBtl ? (
-                              <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-900 font-bold text-[10px] border border-purple-200">
-                                Recompensa BTL
+                    {coupons.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="py-10 text-center text-stone-500">
+                          No se encontraron cupones con los filtros seleccionados.
+                        </td>
+                      </tr>
+                    ) : (
+                      coupons.map((c) => {
+                        const isBtl = c.coupon_type === 'btl' || c.code.startsWith('MARIAI-');
+                        const isExclusive = c.target_type === 'exclusive' || c.coupon_type === 'commercial_exclusive' || Boolean(c.user_id) || Boolean(c.user_email);
+                        return (
+                          <tr key={c.code} className="hover:bg-amber-50/30 transition-colors">
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <span className="font-mono font-bold text-stone-900 block">{c.code}</span>
+                              <span className="text-[10px] text-stone-500 truncate max-w-[180px] block">{c.description}</span>
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              {isBtl ? (
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-purple-100 text-purple-900 font-bold text-[10px] border border-purple-200 whitespace-nowrap shrink-0">
+                                  Recompensa BTL
+                                </span>
+                              ) : isExclusive ? (
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 font-bold text-[10px] border border-amber-300 whitespace-nowrap shrink-0">
+                                  Exclusivo Cliente
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-900 font-bold text-[10px] border border-blue-200 whitespace-nowrap shrink-0">
+                                  Comercial General
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              {c.owner_name || c.owner_email || c.user_email ? (
+                                <div className="flex items-center gap-1.5 whitespace-nowrap">
+                                  <div className="w-5 h-5 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center text-[10px] font-bold shrink-0">
+                                    <User className="w-3 h-3" />
+                                  </div>
+                                  <div className="flex flex-col min-w-0">
+                                    <span className="font-bold text-stone-900 truncate max-w-[160px] block">
+                                      {c.owner_name || 'Cliente registrado'}
+                                    </span>
+                                    <span className="text-[10px] text-stone-500 font-mono truncate max-w-[160px] block">
+                                      {c.owner_email || c.user_email}
+                                    </span>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-1.5 text-stone-500 whitespace-nowrap">
+                                  <Users className="w-3.5 h-3.5 text-stone-400 shrink-0" />
+                                  <span className="text-[11px] font-medium">Todos los clientes</span>
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <span className="inline-flex items-center justify-center px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 font-extrabold text-[11px] whitespace-nowrap shrink-0 border border-amber-300/70">
+                                {c.discount_percent}% OFF
                               </span>
-                            ) : (
-                              <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-900 font-bold text-[10px] border border-blue-200">
-                                Comercial
+                            </td>
+                            <td className="py-3 px-4 text-stone-700 whitespace-nowrap">
+                              {c.level_required ? `Nivel 0${c.level_required}` : 'Campaña Comercial'}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <span className="font-bold text-stone-900">{c.times_used}</span>
+                              <span className="text-stone-400"> / {c.max_uses > 999 ? '∞' : c.max_uses}</span>
+                            </td>
+                            <td className="py-3 px-4 text-stone-500 text-[11px] whitespace-nowrap">
+                              {c.expires_at ? c.expires_at.split('T')[0] : 'Sin vencimiento'}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <span
+                                className={`inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap shrink-0 ${
+                                  c.is_active
+                                    ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                                    : 'bg-stone-200 text-stone-600 border border-stone-300'
+                                }`}
+                              >
+                                {c.is_active ? 'Activo' : 'Inactivo'}
                               </span>
-                            )}
-                          </td>
-                          <td className="py-3 px-4">
-                            <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 font-extrabold text-[11px]">
-                              {c.discount_percent}% OFF
-                            </span>
-                          </td>
-                          <td className="py-3 px-4 text-stone-700">
-                            {c.level_required ? `Nivel 0${c.level_required}` : 'Campaña General'}
-                          </td>
-                          <td className="py-3 px-4">
-                            <span className="font-bold text-stone-900">{c.times_used}</span>
-                            <span className="text-stone-400"> / {c.max_uses > 999 ? '∞' : c.max_uses}</span>
-                          </td>
-                          <td className="py-3 px-4 text-stone-500 text-[11px]">
-                            {c.expires_at ? c.expires_at.split('T')[0] : 'Sin vencimiento'}
-                          </td>
-                          <td className="py-3 px-4">
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                c.is_active ? 'bg-emerald-100 text-emerald-900' : 'bg-stone-200 text-stone-600'
-                              }`}
-                            >
-                              {c.is_active ? 'Activo' : 'Inactivo'}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4 text-center">
-                            <button
-                              onClick={() => handleToggleCouponActive(c)}
-                              className={`py-1 px-2.5 rounded-lg text-[10px] font-bold cursor-pointer transition-colors ${
-                                c.is_active
-                                  ? 'bg-rose-100 hover:bg-rose-200 text-rose-800'
-                                  : 'bg-emerald-100 hover:bg-emerald-200 text-emerald-800'
-                              }`}
-                            >
-                              {c.is_active ? 'Desactivar' : 'Activar'}
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                            </td>
+                            <td className="py-3 px-4 text-center whitespace-nowrap">
+                              <button
+                                onClick={() => handleToggleCouponActive(c)}
+                                className={`py-1 px-2.5 rounded-lg text-[10px] font-bold cursor-pointer transition-colors whitespace-nowrap ${
+                                  c.is_active
+                                    ? 'bg-rose-100 hover:bg-rose-200 text-rose-800'
+                                    : 'bg-emerald-100 hover:bg-emerald-200 text-emerald-800'
+                                }`}
+                              >
+                                {c.is_active ? 'Desactivar' : 'Activar'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
                   </tbody>
                 </table>
               </div>
+
+              {/* Pagination Controls for Coupons */}
+              {couponTotalPages > 1 && (
+                <div className="p-3 border-t border-stone-200/80 flex items-center justify-between text-xs">
+                  <button
+                    disabled={couponPage <= 1}
+                    onClick={() => loadCoupons(couponPage - 1, couponTypeFilter, couponStatusFilter, couponSearch)}
+                    className="py-1 px-3 rounded-lg border border-stone-200 text-stone-700 hover:bg-stone-100 disabled:opacity-40 cursor-pointer flex items-center gap-1"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                    <span>Anterior</span>
+                  </button>
+                  <span className="text-stone-600 font-semibold">
+                    Página {couponPage} de {couponTotalPages}
+                  </span>
+                  <button
+                    disabled={couponPage >= couponTotalPages}
+                    onClick={() => loadCoupons(couponPage + 1, couponTypeFilter, couponStatusFilter, couponSearch)}
+                    className="py-1 px-3 rounded-lg border border-stone-200 text-stone-700 hover:bg-stone-100 disabled:opacity-40 cursor-pointer flex items-center gap-1"
+                  >
+                    <span>Siguiente</span>
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1741,6 +1950,64 @@ export const AdminDashboardPage: React.FC = () => {
               </div>
 
               <form onSubmit={handleCreateCoupon} className="space-y-3.5">
+                {/* Target Type Toggle */}
+                <div>
+                  <label className="text-xs font-bold text-stone-700 block mb-1.5">
+                    Tipo de Destinatario:
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setCouponForm({ ...couponForm, targetType: 'general', userId: '', maxUses: 100 })}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                        couponForm.targetType === 'general'
+                          ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                          : 'bg-stone-50 text-stone-700 border-stone-200 hover:bg-stone-100'
+                      }`}
+                    >
+                      <Users className="w-3.5 h-3.5" />
+                      <span>Público General</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCouponForm({ ...couponForm, targetType: 'exclusive', maxUses: 1 })}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                        couponForm.targetType === 'exclusive'
+                          ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                          : 'bg-stone-50 text-stone-700 border-stone-200 hover:bg-stone-100'
+                      }`}
+                    >
+                      <User className="w-3.5 h-3.5" />
+                      <span>Exclusivo Cliente</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Customer Selector for Exclusive Coupons */}
+                {couponForm.targetType === 'exclusive' && (
+                  <div>
+                    <label className="text-xs font-bold text-stone-700 block mb-1">
+                      Cliente Destinatario Registrado:
+                    </label>
+                    <select
+                      required
+                      value={couponForm.userId}
+                      onChange={(e) => setCouponForm({ ...couponForm, userId: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                    >
+                      <option value="">-- Seleccionar Cliente Registrado --</option>
+                      {customerOptions.map((cust) => (
+                        <option key={cust.id} value={cust.id}>
+                          {cust.name} ({cust.email})
+                        </option>
+                      ))}
+                    </select>
+                    <span className="text-[10px] text-stone-500 mt-0.5 block">
+                      Solo este usuario podrá redimir el código iniciando sesión con su cuenta.
+                    </span>
+                  </div>
+                )}
+
                 <div>
                   <label className="text-xs font-bold text-stone-700 block mb-1">
                     Código de Cupón (Alfanumérico):
@@ -1784,7 +2051,7 @@ export const AdminDashboardPage: React.FC = () => {
                       max={99999}
                       required
                       value={couponForm.maxUses}
-                      onChange={(e) => setCouponForm({ ...couponForm, maxUses: parseInt(e.target.value, 10) || 100 })}
+                      onChange={(e) => setCouponForm({ ...couponForm, maxUses: parseInt(e.target.value, 10) || 1 })}
                       className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
                     />
                   </div>
