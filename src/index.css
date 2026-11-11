@@ -1,1 +1,137 @@
 @import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-serif: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --canvas-bg: #FAF7F2;
+    --canvas-subtle: #F3ECE1;
+    --glass-surface: rgba(255, 255, 255, 0.72);
+    --glass-border: rgba(255, 255, 255, 0.65);
+    --glass-border-subtle: rgba(220, 210, 198, 0.4);
+    --glass-shadow: 0 12px 36px -6px rgba(138, 115, 90, 0.12), 0 4px 16px -2px rgba(0, 0, 0, 0.04);
+    --glass-highlight: inset 0 1px 1px 0 rgba(255, 255, 255, 0.85);
+    --accent-warm: #C87D55;
+    --accent-amber: #D89F68;
+    --accent-sage: #6B8E6A;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--canvas-bg);
+    color: #2E2823;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+/* Apple Liquid Glass Surface Styles */
+.liquid-glass {
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  box-shadow: 0 10px 30px -8px rgba(145, 120, 95, 0.10), inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.9);
+}
+
+.liquid-glass-subtle {
+  background: rgba(255, 255, 255, 0.52);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow: 0 6px 20px -6px rgba(150, 125, 100, 0.07), inset 0 1px 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.liquid-glass-elevated {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(32px) saturate(190%);
+  -webkit-backdrop-filter: blur(32px) saturate(190%);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 20px 48px -12px rgba(120, 90, 65, 0.16), 0 4px 16px rgba(0, 0, 0, 0.03), inset 0 1px 2px 0 rgba(255, 255, 255, 1);
+}
+
+.liquid-glass-bar {
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03);
+}
+
+/* Specular Button Effects */
+.liquid-btn-primary {
+  background: linear-gradient(180deg, #322A24 0%, #1E1916 100%);
+  box-shadow: 0 4px 14px rgba(30, 25, 22, 0.25), inset 0 1px 1px rgba(255, 255, 255, 0.35);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.liquid-btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 24px rgba(30, 25, 22, 0.32), inset 0 1px 1px rgba(255, 255, 255, 0.45);
+}
+
+.liquid-btn-secondary {
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(220, 210, 195, 0.7);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04), inset 0 1px 1px rgba(255, 255, 255, 0.9);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.liquid-btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(190, 175, 155, 0.8);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(120, 95, 70, 0.1), inset 0 1px 1.5px rgba(255, 255, 255, 1);
+}
+
+/* Ambient glow & shimmer animations */
+@keyframes shimmerWave {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-shimmer {
+  background: linear-gradient(90deg, rgba(255,255,255,0.2) 25%, rgba(255,255,255,0.7) 50%, rgba(255,255,255,0.2) 75%);
+  background-size: 200% 100%;
+  animation: shimmerWave 2s infinite linear;
+}
+
+@keyframes floatGentle {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.animate-float-gentle {
+  animation: floatGentle 5s ease-in-out infinite;
+}
+
+/* Custom scrollbars with Apple aesthetic */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(180, 165, 145, 0.35);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(180, 165, 145, 0.6);
+}

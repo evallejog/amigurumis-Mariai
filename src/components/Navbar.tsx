@@ -13,7 +13,8 @@ import {
   LogOut,
   FileText,
   ChevronDown,
-  Sparkles
+  Sparkles,
+  ShieldCheck
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -120,9 +121,29 @@ export const Navbar: React.FC<NavbarProps> = ({ activeSection, onNavigate }) => 
                     onMouseLeave={() => setUserDropdownOpen(false)}
                   >
                     <div className="px-3 py-2 border-b border-stone-100">
-                      <p className="text-xs font-bold text-stone-900 truncate">{user?.fullName}</p>
+                      <div className="flex items-center justify-between gap-1">
+                        <p className="text-xs font-bold text-stone-900 truncate">{user?.fullName}</p>
+                        {user?.role === 'admin' && (
+                          <span className="px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-900 font-extrabold text-[9px] uppercase tracking-wider">
+                            Admin
+                          </span>
+                        )}
+                      </div>
                       <p className="text-[10px] text-stone-500 truncate">{user?.email}</p>
                     </div>
+
+                    {user?.role === 'admin' && (
+                      <button
+                        onClick={() => {
+                          setUserDropdownOpen(false);
+                          navigate('/admin');
+                        }}
+                        className="w-full text-left px-3 py-2 rounded-xl text-xs font-bold text-amber-900 bg-amber-50/80 hover:bg-amber-100/90 flex items-center gap-2 cursor-pointer transition-colors border border-amber-200/60 my-1"
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5 text-amber-700" />
+                        <span>Panel Administrador</span>
+                      </button>
+                    )}
 
                     <button
                       onClick={() => {

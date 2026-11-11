@@ -1037,6 +1037,256 @@ async function startServer() {
     }
   });
 
+  // ----------------------------------------------------
+  // ADMINISTRATIVE AUTHORIZATION & ENDPOINTS (FASE 2F.1)
+  // ----------------------------------------------------
+
+  // Middleware de autorización estricta para roles administrativos
+  function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+    const user = getAuthUser(req);
+    if (!user) {
+      return res.status(401).json({ error: 'No autenticado. Inicia sesión para continuar.' });
+    }
+    if (user.role !== 'admin') {
+      return res.status(403).json({ error: 'Acceso denegado. Se requieren permisos de administrador.' });
+    }
+    (req as any).adminUser = user;
+    next();
+  }
+
+  // GET /api/admin/me - Perfil y verificación del administrador actual
+  app.get('/api/admin/me', requireAdmin, (req, res) => {
+    const adminUser = (req as any).adminUser;
+    return res.json({
+      user: {
+        id: adminUser.id,
+        name: adminUser.name,
+        fullName: adminUser.name,
+        email: adminUser.email,
+        role: adminUser.role,
+        phone: adminUser.phone || '',
+        city: adminUser.city || '',
+        createdAt: adminUser.created_at,
+      },
+    });
+  });
+
+  // GET /api/admin/overview - Resumen global de métricas comerciales y operativas
+  app.get('/api/admin/overview', requireAdmin, (req, res) => {
+    try {
+      const ordersStat = db.prepare(`
+        SELECT 
+          COUNT(*) as total_orders,
+          COALESCE(SUM(total), 0) as total_revenue,
+          COALESCE(SUM(subtotal), 0) as total_subtotal,
+          COALESCE(SUM(discount), 0) as total_discounts,
+          COALESCE(AVG(total), 0) as avg_order_value
+        FROM orders
+      `).get() as any;
+
+      const customersStat = db.prepare(`
+        SELECT COUNT(*) as total_customers FROM users WHERE role = 'customer'
+      `).get() as any;
+
+      const couponsStat = db.prepare(`
+        SELECT 
+          COUNT(*) as total_coupons,
+          COALESCE(SUM(times_used), 0) as total_redemptions
+        FROM coupons
+      `).get() as any;
+
+      const btlStat = db.prepare(`
+        SELECT 
+          COUNT(*) as total_games,
+          COALESCE(SUM(victory), 0) as total_victories,
+          COALESCE(SUM(wool_collected), 0) as total_wool
+        FROM game_sessions
+      `).get() as any;
+
+      const btlSessionsCount = (db.prepare('SELECT COUNT(*) as count FROM btl_sessions').get() as any)?.count || 0;
+
+      const recentOrders = db.prepare(`
+        SELECT id, order_number, customer_name, customer_email, customer_city, total, status, created_at, is_simulated
+        FROM orders
+        ORDER BY datetime(created_at) DESC
+        LIMIT 5
+      `).all() as any[];
+
+      return res.json({
+        overview: {
+          totalOrders: ordersStat?.total_orders || 0,
+          totalRevenue: ordersStat?.total_revenue || 0,
+          totalSubtotal: ordersStat?.total_subtotal || 0,
+          totalDiscounts: ordersStat?.total_discounts || 0,
+          averageOrderValue: Math.round(ordersStat?.avg_order_value || 0),
+          totalCustomers: customersStat?.total_customers || 0,
+          totalCoupons: couponsStat?.total_coupons || 0,
+          totalCouponsRedeemed: couponsStat?.total_redemptions || 0,
+          btlGamesPlayed: (btlStat?.total_games || 0) + btlSessionsCount,
+          btlVictories: btlStat?.total_victories || 0,
+          btlWoolCollected: btlStat?.total_wool || 0,
+        },
+        recentOrders,
+      });
+    } catch (err: any) {
+      console.error('Error fetching admin overview:', err);
+      return res.status(500).json({ error: 'Error al generar resumen administrativo.' });
+    }
+  });
+
+  // GET /api/admin/orders - Listado paginado de pedidos con filtro opcional de estado
+  app.get('/api/admin/orders', requireAdmin, (req, res) => {
+    try {
+      const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
+      const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string, 10) || 10));
+      const offset = (page - 1) * limit;
+      const status = typeof req.query.status === 'string' && req.query.status.trim() ? req.query.status.trim() : null;
+
+      let total = 0;
+      let orders: any[] = [];
+
+      if (status && status !== 'todos') {
+        total = (db.prepare('SELECT COUNT(*) as count FROM orders WHERE status = ?').get(status) as any)?.count || 0;
+        orders = db.prepare(`
+          SELECT 
+            o.id, o.order_number, o.customer_name, o.customer_email, o.customer_phone,
+            o.customer_city, o.customer_address, o.shipping_method, o.payment_method,
+            o.subtotal, o.shipping_cost, o.discount, o.coupon_code, o.total,
+            o.status, o.is_simulated, o.created_at,
+            (SELECT COUNT(*) FROM order_items WHERE order_id = o.id) as item_count
+          FROM orders o
+          WHERE o.status = ?
+          ORDER BY datetime(o.created_at) DESC
+          LIMIT ? OFFSET ?
+        `).all(status, limit, offset);
+      } else {
+        total = (db.prepare('SELECT COUNT(*) as count FROM orders').get() as any)?.count || 0;
+        orders = db.prepare(`
+          SELECT 
+            o.id, o.order_number, o.customer_name, o.customer_email, o.customer_phone,
+            o.customer_city, o.customer_address, o.shipping_method, o.payment_method,
+            o.subtotal, o.shipping_cost, o.discount, o.coupon_code, o.total,
+            o.status, o.is_simulated, o.created_at,
+            (SELECT COUNT(*) FROM order_items WHERE order_id = o.id) as item_count
+          FROM orders o
+          ORDER BY datetime(o.created_at) DESC
+          LIMIT ? OFFSET ?
+        `).all(limit, offset);
+      }
+
+      const totalPages = Math.ceil(total / limit) || 1;
+
+      return res.json({
+        orders,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages,
+        },
+      });
+    } catch (err: any) {
+      console.error('Error fetching admin orders:', err);
+      return res.status(500).json({ error: 'Error al consultar órdenes de compra.' });
+    }
+  });
+
+  // GET /api/admin/customers - Listado paginado de clientes registrados y actividad
+  app.get('/api/admin/customers', requireAdmin, (req, res) => {
+    try {
+      const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
+      const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string, 10) || 10));
+      const offset = (page - 1) * limit;
+
+      const total = (db.prepare(`SELECT COUNT(*) as count FROM users WHERE role = 'customer'`).get() as any)?.count || 0;
+      const customers = db.prepare(`
+        SELECT 
+          u.id, u.name, u.email, u.phone, u.city, u.department, u.created_at,
+          COUNT(o.id) as orders_count,
+          COALESCE(SUM(o.total), 0) as total_spent,
+          MAX(o.created_at) as last_order_date
+        FROM users u
+        LEFT JOIN orders o ON (u.id = o.user_id OR lower(u.email) = lower(o.customer_email))
+        WHERE u.role = 'customer'
+        GROUP BY u.id
+        ORDER BY datetime(u.created_at) DESC
+        LIMIT ? OFFSET ?
+      `).all(limit, offset);
+
+      const totalPages = Math.ceil(total / limit) || 1;
+
+      return res.json({
+        customers,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages,
+        },
+      });
+    } catch (err: any) {
+      console.error('Error fetching admin customers:', err);
+      return res.status(500).json({ error: 'Error al consultar listado de clientes.' });
+    }
+  });
+
+  // GET /api/admin/coupons - Listado de cupones y métricas de redención
+  app.get('/api/admin/coupons', requireAdmin, (req, res) => {
+    try {
+      const coupons = db.prepare(`
+        SELECT 
+          code, discount_percent, level_required, max_uses, times_used,
+          is_active, description, user_id, session_id, created_at, expires_at
+        FROM coupons
+        ORDER BY datetime(created_at) DESC
+      `).all();
+
+      return res.json({ coupons });
+    } catch (err: any) {
+      console.error('Error fetching admin coupons:', err);
+      return res.status(500).json({ error: 'Error al consultar cupones.' });
+    }
+  });
+
+  // GET /api/admin/btl/overview - Estadísticas y telemetría de juego por nivel
+  app.get('/api/admin/btl/overview', requireAdmin, (req, res) => {
+    try {
+      const levelStats = db.prepare(`
+        SELECT 
+          level,
+          COUNT(*) as attempts,
+          COALESCE(SUM(victory), 0) as victories,
+          COALESCE(SUM(wool_collected), 0) as wool_collected,
+          COALESCE(AVG(score), 0) as avg_score,
+          COALESCE(AVG(time_seconds), 0) as avg_time
+        FROM game_sessions
+        GROUP BY level
+        ORDER BY level ASC
+      `).all();
+
+      const totalSessions = (db.prepare('SELECT COUNT(*) as count FROM game_sessions').get() as any)?.count || 0;
+      const totalBtlSessions = (db.prepare('SELECT COUNT(*) as count FROM btl_sessions').get() as any)?.count || 0;
+      const victories = (db.prepare('SELECT COUNT(*) as count FROM game_sessions WHERE victory = 1').get() as any)?.count || 0;
+      const btlCouponsCount = (db.prepare(`SELECT COUNT(*) as count FROM coupons WHERE code LIKE 'MARIAI-%'`).get() as any)?.count || 0;
+      const btlCouponsUsed = (db.prepare(`SELECT COALESCE(SUM(times_used), 0) as count FROM coupons WHERE code LIKE 'MARIAI-%'`).get() as any)?.count || 0;
+
+      return res.json({
+        summary: {
+          totalGameRuns: totalSessions + totalBtlSessions,
+          completedSessions: totalSessions,
+          victories,
+          victoryRate: totalSessions > 0 ? Math.round((victories / totalSessions) * 100) : 0,
+          btlCouponsGenerated: btlCouponsCount,
+          btlCouponsRedeemed: btlCouponsUsed,
+        },
+        levelStats,
+      });
+    } catch (err: any) {
+      console.error('Error fetching admin BTL overview:', err);
+      return res.status(500).json({ error: 'Error al consultar métricas del videojuego BTL.' });
+    }
+  });
+
   // 404 for unhandled API requests
   app.all('/api/*', (req, res) => {
     return res.status(404).json({ error: 'Ruta de API no encontrada.' });
