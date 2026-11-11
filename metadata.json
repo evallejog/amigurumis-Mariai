@@ -1,0 +1,6 @@
+{
+  "name": "Amigurumis Mariai | Muñecos Artesanales a Crochet y Videojuego BTL",
+  "description": "Amigurumis Mariai: Tienda virtual de muñecos y figuras artesanales tejidas a mano en Colombia con técnica de crochet, catálogo exclusivo y minivideojuego BTL.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
