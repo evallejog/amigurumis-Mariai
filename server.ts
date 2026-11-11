@@ -87,7 +87,8 @@ async function startServer() {
   );
 
   app.use(cookieParser());
-  app.use(express.json({ limit: '2mb' }));
+  app.use('/uploads', express.static(path.resolve(process.cwd(), 'public', 'uploads')));
+  app.use(express.json({ limit: '10mb' }));
 
   // Rate Limiting: relaxed in development / testing to prevent proxy-level lockout
   const isDev = process.env.NODE_ENV !== 'production';
@@ -373,7 +374,131 @@ async function startServer() {
   });
 
   // ----------------------------------------------------
-  // COUPONS & PROMOTIONAL VALIDATION ENDPOINTS (BTL)
+  // PRODUCTS & PUBLIC CATALOG ENDPOINTS (SQLITE PERSISTENT)
+  // ----------------------------------------------------
+
+  function formatDbProduct(row: any) {
+    let materials: string[] = [];
+    try {
+      materials = JSON.parse(row.materials || '[]');
+    } catch {
+      materials = row.materials ? [row.materials] : [];
+    }
+
+    let additionalImages: string[] = [];
+    try {
+      additionalImages = JSON.parse(row.additional_images || '[]');
+    } catch {
+      additionalImages = [];
+    }
+
+    let tags: string[] = [];
+    try {
+      tags = JSON.parse(row.tags || '[]');
+    } catch {
+      tags = [];
+    }
+
+    const stockUnits = typeof row.stock_units === 'number' ? row.stock_units : 0;
+    const threshold = typeof row.low_stock_threshold === 'number' ? row.low_stock_threshold : 3;
+
+    let availability: string = 'in_stock';
+    if (row.status === 'out_of_stock' || stockUnits <= 0) {
+      availability = 'out_of_stock';
+    } else if (stockUnits <= threshold) {
+      availability = 'low_stock';
+    } else {
+      availability = 'in_stock';
+    }
+
+    return {
+      id: row.id,
+      sku: row.sku,
+      name: row.name,
+      category: row.category,
+      shortDescription: row.short_description,
+      fullDescription: row.full_description,
+      price: row.price,
+      currency: row.currency || 'COP',
+      stockUnits,
+      lowStockThreshold: threshold,
+      availability,
+      status: row.status,
+      dimensions: {
+        heightCm: row.height_cm,
+        widthCm: row.width_cm,
+        depthCm: row.depth_cm || undefined,
+      },
+      materials,
+      colors: row.colors,
+      weaveType: row.weave_type,
+      careInstructions: row.care_instructions,
+      notes: row.notes,
+      approxCraftTimeHours: row.craft_time_hours,
+      imageUrl: row.image_url,
+      additionalImages,
+      tags,
+      featured: Boolean(row.featured),
+      difficulty: row.difficulty,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  // GET /api/products - Consulta productos publicados del catálogo
+  app.get('/api/products', (req, res) => {
+    try {
+      const { category, search, sort } = req.query;
+      let query = "SELECT * FROM products WHERE status != 'hidden'";
+      const params: any[] = [];
+
+      if (category && typeof category === 'string' && category !== 'todos') {
+        query += ' AND category = ?';
+        params.push(category.trim().toLowerCase());
+      }
+
+      if (search && typeof search === 'string' && search.trim()) {
+        query += ' AND (name LIKE ? OR short_description LIKE ? OR sku LIKE ? OR tags LIKE ?)';
+        const term = `%${search.trim()}%`;
+        params.push(term, term, term, term);
+      }
+
+      if (sort === 'price-asc') {
+        query += ' ORDER BY price ASC';
+      } else if (sort === 'price-desc') {
+        query += ' ORDER BY price DESC';
+      } else if (sort === 'craft-time') {
+        query += ' ORDER BY craft_time_hours ASC';
+      } else {
+        query += ' ORDER BY featured DESC, datetime(created_at) DESC';
+      }
+
+      const rows = db.prepare(query).all(...params) as any[];
+      const products = rows.map(formatDbProduct);
+      return res.json({ products, total: products.length });
+    } catch (err: any) {
+      console.error('Error fetching public products:', err);
+      return res.status(500).json({ error: 'Error al consultar productos del catálogo.' });
+    }
+  });
+
+  // GET /api/products/:id - Consulta detalle de producto por ID o SKU
+  app.get('/api/products/:id', (req, res) => {
+    try {
+      const { id } = req.params;
+      const row = db.prepare("SELECT * FROM products WHERE (id = ? OR sku = ?) AND status != 'hidden'").get(id, id) as any;
+      if (!row) {
+        return res.status(404).json({ error: 'Producto no encontrado.' });
+      }
+      return res.json({ product: formatDbProduct(row) });
+    } catch (err: any) {
+      console.error('Error fetching product by id:', err);
+      return res.status(500).json({ error: 'Error al consultar el producto.' });
+    }
+  });
+
+  // ----------------------------------------------------
+  // COUPONS & PROMOTIONAL VALIDATION ENDPOINTS
   // ----------------------------------------------------
 
   // POST /api/coupons/validate - Valida cupón en base de datos con contrato dual seguro
@@ -661,11 +786,13 @@ async function startServer() {
         // Validación estricta de exclusividad de usuario
         const isExclusive = coupon.target_type === 'exclusive' || Boolean(coupon.user_id) || Boolean(coupon.user_email);
         if (isExclusive) {
-          const matchesUserId = userId && coupon.user_id && userId === coupon.user_id;
-          const matchesUserEmail = coupon.user_email && (
-            (authUser?.email && authUser.email.toLowerCase() === coupon.user_email.toLowerCase()) ||
-            (customer?.email && customer.email.toLowerCase() === coupon.user_email.toLowerCase())
-          );
+          if (!authUser) {
+            return res.status(403).json({
+              error: 'Este cupón es exclusivo y requiere iniciar sesión con la cuenta destinataria para aplicarse.',
+            });
+          }
+          const matchesUserId = coupon.user_id && authUser.id === coupon.user_id;
+          const matchesUserEmail = coupon.user_email && authUser.email.toLowerCase() === coupon.user_email.toLowerCase();
 
           if (!matchesUserId && !matchesUserEmail) {
             return res.status(403).json({
@@ -721,11 +848,13 @@ async function startServer() {
           const updateResult = db.prepare(`
             UPDATE coupons 
             SET times_used = times_used + 1 
-            WHERE code = ? AND is_active = 1 AND (max_uses IS NULL OR times_used < max_uses)
+            WHERE code = ? AND is_active = 1 
+              AND (max_uses IS NULL OR times_used < max_uses)
+              AND (expires_at IS NULL OR datetime(expires_at) >= datetime('now'))
           `).run(appliedCouponCode);
 
           if (updateResult.changes === 0) {
-            throw new Error('El cupón no pudo ser redimido (límite de usos alcanzado o cupón inactivo en concurrencia).');
+            throw new Error('El cupón no pudo ser redimido (límite de usos alcanzado, cupón expirado o inactivo en concurrencia).');
           }
         }
 

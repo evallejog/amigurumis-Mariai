@@ -115,6 +115,40 @@ export function initDatabase() {
       created_at TEXT NOT NULL,
       FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS products (
+      id TEXT PRIMARY KEY,
+      sku TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL,
+      short_description TEXT NOT NULL,
+      full_description TEXT NOT NULL,
+      price INTEGER NOT NULL,
+      currency TEXT DEFAULT 'COP',
+      stock_units INTEGER NOT NULL DEFAULT 0,
+      low_stock_threshold INTEGER NOT NULL DEFAULT 3,
+      status TEXT NOT NULL DEFAULT 'published',
+      height_cm REAL,
+      width_cm REAL,
+      depth_cm REAL,
+      craft_time_hours REAL,
+      difficulty TEXT,
+      weave_type TEXT,
+      materials TEXT,
+      colors TEXT,
+      care_instructions TEXT,
+      notes TEXT,
+      image_url TEXT NOT NULL,
+      additional_images TEXT,
+      tags TEXT,
+      featured INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
+    CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
+    CREATE INDEX IF NOT EXISTS idx_products_status ON products(status);
   `);
 
   // Ensure test-sess-1 from previous verification session is recognized
@@ -301,6 +335,280 @@ export function initDatabase() {
     if (res.created) {
       console.log(`[AUTH] ${res.message} (admin@amigurumismariai.com)`);
     }
+  }
+
+  // Ensure public uploads directory exists for real product photographs
+  const uploadsDir = path.resolve(process.cwd(), 'public', 'uploads');
+  if (!fs.existsSync(uploadsDir)) {
+    try {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    } catch {}
+  }
+
+  // Seed default handcrafted amigurumis catalog if empty
+  try {
+    const countProducts = (db.prepare('SELECT count(*) as count FROM products').get() as any)?.count || 0;
+    if (countProducts === 0) {
+      const insertProductStmt = db.prepare(`
+        INSERT INTO products (
+          id, sku, name, category, short_description, full_description, price, currency,
+          stock_units, low_stock_threshold, status, height_cm, width_cm, depth_cm,
+          craft_time_hours, difficulty, weave_type, materials, colors, care_instructions,
+          notes, image_url, additional_images, tags, featured, created_at, updated_at
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?, ?, 'COP',
+          ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?, ?
+        )
+      `);
+
+      const initialProducts = [
+        {
+          id: 'ami-001',
+          sku: 'AMI-001',
+          name: 'Osito Silvestre con Bufanda Mostaza',
+          category: 'animales',
+          shortDescription: 'Oso artesanal tejido en algodón peinado suave con bufanda tejida en punto ochos.',
+          fullDescription: 'Oso de textura cálida confeccionado con punto bajo en espiral continua para un acabado sin costuras visibles. Posee extremidades articuladas cosidas a mano, ojos de seguridad con traba interna y relleno de vellón siliconado hipoalergénico de alta resiliencia. Su bufanda mostaza es removible.',
+          price: 18500,
+          stockUnits: 4,
+          lowStockThreshold: 2,
+          status: 'published',
+          heightCm: 22,
+          widthCm: 14,
+          depthCm: 10,
+          craftTimeHours: 8,
+          difficulty: 'Intermedia',
+          weaveType: 'Punto bajo en espiral continua',
+          materials: ['Hilo 100% algodón rústico peinado', 'Vellón siliconado hipoalergénico', 'Ojos de seguridad certificados'],
+          colors: 'Marrón tostado, mostaza, marfil',
+          careInstructions: 'Lavar a mano con agua fría y jabón neutro. Secar horizontal a la sombra.',
+          notes: 'Incluye bufanda desmontable.',
+          imageUrl: '/src/assets/images/product_crochet_bear_1794329732428.jpg',
+          additionalImages: [],
+          tags: ['Clásico', 'Bebés', 'Regalo', 'Bufanda tejida'],
+          featured: 1,
+        },
+        {
+          id: 'ami-002',
+          sku: 'AMI-002',
+          name: 'Ballenita Marina Suave',
+          category: 'marinos',
+          shortDescription: 'Pequeña ballena de tacto sedoso en tono celeste pastel con vientre crudo contrastante.',
+          fullDescription: 'Diseño marino ergonómico y tierno, ideal para abrazar o decorar espacios de descanso. Realizada en punto cerrado con hilo peinado mercerizado de primera calidad, aletas moldeadas y sonrisa bordada a mano con hilo de seda.',
+          price: 12500,
+          stockUnits: 6,
+          lowStockThreshold: 3,
+          status: 'published',
+          heightCm: 12,
+          widthCm: 18,
+          depthCm: 12,
+          craftTimeHours: 5,
+          difficulty: 'Básica',
+          weaveType: 'Punto cerrado mercerizado',
+          materials: ['Algodón peinado mercerizado', 'Relleno liviano lavable', 'Detalles bordados a mano'],
+          colors: 'Celeste pastel, crudo',
+          careInstructions: 'Lavado suave a mano.',
+          notes: '',
+          imageUrl: '/src/assets/images/product_crochet_whale_1794329732780.jpg',
+          additionalImages: [],
+          tags: ['Marino', 'Compacto', 'Suave', 'Acuático'],
+          featured: 1,
+        },
+        {
+          id: 'ami-003',
+          sku: 'AMI-003',
+          name: 'Dragón Guardián Esmeralda y Lavanda',
+          category: 'fantasia',
+          shortDescription: 'Criatura fantástica con alas acanaladas, cuernos nacarados y cresta dorsal en lila pastel.',
+          fullDescription: 'Pieza maestra de alta complejidad artesanal que combina técnicas de modelado textil y crochet tridimensional. Cuenta con detalles en relieve en abdomen y lomo, pequeñas alas móviles y una pose reposada llena de magia.',
+          price: 28500,
+          stockUnits: 3,
+          lowStockThreshold: 2,
+          status: 'published',
+          heightCm: 24,
+          widthCm: 20,
+          depthCm: 15,
+          craftTimeHours: 14,
+          difficulty: 'Avanzada',
+          weaveType: 'Crochet tridimensional estructurado',
+          materials: ['Mezcla lana y algodón orgánico premium', 'Algodón mercerizado', 'Ojos iris con profundidad'],
+          colors: 'Esmeralda, lavanda pastel, perla',
+          careInstructions: 'Limpieza en seco o paño ligeramente húmedo.',
+          notes: 'Edición para coleccionistas.',
+          imageUrl: '/src/assets/images/product_crochet_dragon_1794329733851.jpg',
+          additionalImages: [],
+          tags: ['Fantasía', 'Pieza de colección', 'Por encargo'],
+          featured: 1,
+        },
+        {
+          id: 'ami-004',
+          sku: 'AMI-004',
+          name: 'Osito Astronauta Cosmos Edition',
+          category: 'personalizados',
+          shortDescription: 'Diseño vanguardista de autor artesanal: traje espacial tejido y escafandra visor.',
+          fullDescription: 'Edición especial de autor nacida en nuestro taller y tejida punto a punto por nuestras maestras artesanas. Incluye escafandra con visor satinado, estrellas bordadas con hilo metalizado y banderín bordado.',
+          price: 32000,
+          stockUnits: 1,
+          lowStockThreshold: 2,
+          status: 'published',
+          heightCm: 25,
+          widthCm: 15,
+          depthCm: 12,
+          craftTimeHours: 16,
+          difficulty: 'Experta',
+          weaveType: 'Modelado espacial en relieve',
+          materials: ['Algodón egipcio blanco perla', 'Detalles en hilo lavanda pastel', 'Bordado metalizado'],
+          colors: 'Blanco perla, lavanda, dorado espacial',
+          careInstructions: 'No sumergir en agua. Limpiar con toalla suave.',
+          notes: 'Pieza numerada de autor.',
+          imageUrl: '/src/assets/images/ai_amigurumi_sample_1794329733805.jpg',
+          additionalImages: [],
+          tags: ['Edición Especial', 'Astronauta', 'Pieza de Autor'],
+          featured: 1,
+        },
+        {
+          id: 'ami-005',
+          sku: 'AMI-005',
+          name: 'Zorrito Rojo de Bosque Nórdico',
+          category: 'animales',
+          shortDescription: 'Zorro estilizado con cola esponjosa cepillada y detalles en tono crema en pecho y orejas.',
+          fullDescription: 'Inspirado en la fauna boscosa nórdica. Tejido con hilado de grosor intermedio para brindar firmeza al cuerpo sentado. Cola con técnica de cardado sutil para un efecto texturado natural y adorable hocico bordado.',
+          price: 19500,
+          stockUnits: 2,
+          lowStockThreshold: 2,
+          status: 'published',
+          heightCm: 20,
+          widthCm: 13,
+          depthCm: 11,
+          craftTimeHours: 9,
+          difficulty: 'Intermedia',
+          weaveType: 'Punto bajo con cardado sutil',
+          materials: ['Algodón suave 8/6 teñido al agua', 'Vellón siliconado de alta densidad', 'Bordado en hocico'],
+          colors: 'Rojo terracota, crema, carbón',
+          careInstructions: 'Peinar la cola con cepillo de cerdas suaves. Lavado a mano.',
+          notes: 'Modelo canónico de taller.',
+          imageUrl: '/src/assets/images/product_crochet_bear_1794329732428.jpg',
+          additionalImages: [],
+          tags: ['Bosque', 'Otoño', 'Decoración infantil'],
+          featured: 0,
+        },
+        {
+          id: 'ami-006',
+          sku: 'AMI-006',
+          name: 'Maceta con Suculenta Echeveria',
+          category: 'botanica',
+          shortDescription: 'Planta suculenta en maceta tejida en punto relieve que nunca se marchita.',
+          fullDescription: 'Detalle decorativo para estanterías, escritorios o mesas de noche. Incluye maceta con base estabilizadora interna y roseta de pétalos carnosos en degradé de verdes coronada por un sutil matiz coral en las puntas.',
+          price: 9800,
+          stockUnits: 5,
+          lowStockThreshold: 2,
+          status: 'published',
+          heightCm: 14,
+          widthCm: 9,
+          depthCm: 9,
+          craftTimeHours: 4,
+          difficulty: 'Básica',
+          weaveType: 'Punto relieve floral',
+          materials: ['Hilo de algodón semigrueso', 'Base estabilizadora interna', 'Tierra simulada tejida'],
+          colors: 'Verde menta, verde bosque, terracota maceta',
+          careInstructions: 'Retirar polvo con secador de aire frío.',
+          notes: '',
+          imageUrl: '/src/assets/images/hero_amigurumi_showcase_1794329731742.jpg',
+          additionalImages: [],
+          tags: ['Botánica', 'Escritorio', 'Bajo mantenimiento'],
+          featured: 0,
+        },
+        {
+          id: 'ami-007',
+          sku: 'AMI-007',
+          name: 'Conejita Primavera con Vestido',
+          category: 'animales',
+          shortDescription: 'Conejita de orejas largas caídas con enterito jardinero desmontable y bolsillito.',
+          fullDescription: 'Diseño entrañable con atención especial al vestuario artesanal. Las orejas largas tienen caída natural y el traje cuenta con diminutos botones de madera natural cosidos a mano.',
+          price: 22000,
+          stockUnits: 4,
+          lowStockThreshold: 2,
+          status: 'published',
+          heightCm: 25,
+          widthCm: 12,
+          depthCm: 10,
+          craftTimeHours: 11,
+          difficulty: 'Intermedia',
+          weaveType: 'Punto fino con prendas desmontables',
+          materials: ['Hilo de algodón cardado', 'Botones miniatura de madera', 'Relleno ultra suave'],
+          colors: 'Beige arena, lila vestido',
+          careInstructions: 'Prenda lavable por separado.',
+          notes: 'Incluye vestido desmontable.',
+          imageUrl: '/src/assets/images/hero_amigurumi_showcase_1794329731742.jpg',
+          additionalImages: [],
+          tags: ['Vestuario removible', 'Colección', 'Regalo delicado'],
+          featured: 0,
+        },
+        {
+          id: 'ami-008',
+          sku: 'AMI-008',
+          name: 'Cactus Flor de Desierto',
+          category: 'botanica',
+          shortDescription: 'Cactus columnar tejido con relieve de costillas canalé y pequeñas flores de colores.',
+          fullDescription: 'Arreglo botánico artesanal confeccionado con puntos canalé para lograr la textura de costillas típica de los cactus sin puntas que pinchen. Base en maceta tejida color terracota.',
+          price: 10500,
+          stockUnits: 3,
+          lowStockThreshold: 2,
+          status: 'published',
+          heightCm: 16,
+          widthCm: 8,
+          depthCm: 8,
+          craftTimeHours: 4,
+          difficulty: 'Básica',
+          weaveType: 'Punto canalé vertical',
+          materials: ['Algodón orgánico teñido', 'Maceta en tono terracota', 'Relleno de fibra reciclada'],
+          colors: 'Verde oliva, flores fucsia, maceta óxido',
+          careInstructions: 'Sin riego, mantener en interiores.',
+          notes: '',
+          imageUrl: '/src/assets/images/product_crochet_dragon_1794329733851.jpg',
+          additionalImages: [],
+          tags: ['Botánica', 'Decoración', 'Sin espinas'],
+          featured: 0,
+        },
+      ];
+
+      const now = new Date().toISOString();
+      for (const p of initialProducts) {
+        insertProductStmt.run(
+          p.id,
+          p.sku,
+          p.name,
+          p.category,
+          p.shortDescription,
+          p.fullDescription,
+          p.price,
+          p.stockUnits,
+          p.lowStockThreshold,
+          p.status,
+          p.heightCm,
+          p.widthCm,
+          p.depthCm,
+          p.craftTimeHours,
+          p.difficulty,
+          p.weaveType,
+          JSON.stringify(p.materials),
+          p.colors,
+          p.careInstructions,
+          p.notes,
+          p.imageUrl,
+          JSON.stringify(p.additionalImages),
+          JSON.stringify(p.tags),
+          p.featured,
+          now,
+          now
+        );
+      }
+      console.log(`[CATALOG] ${initialProducts.length} amigurumis iniciales sembrados en SQLite.`);
+    }
+  } catch (err) {
+    console.error('Error seeding initial products in SQLite:', err);
   }
 
   console.log('SQLite database initialized successfully at:', dbPath);
@@ -721,6 +1029,40 @@ export async function syncToTurso(): Promise<{
         created_at TEXT NOT NULL,
         FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
       );
+
+      CREATE TABLE IF NOT EXISTS products (
+        id TEXT PRIMARY KEY,
+        sku TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        category TEXT NOT NULL,
+        short_description TEXT NOT NULL,
+        full_description TEXT NOT NULL,
+        price INTEGER NOT NULL,
+        currency TEXT DEFAULT 'COP',
+        stock_units INTEGER NOT NULL DEFAULT 0,
+        low_stock_threshold INTEGER NOT NULL DEFAULT 3,
+        status TEXT NOT NULL DEFAULT 'published',
+        height_cm REAL,
+        width_cm REAL,
+        depth_cm REAL,
+        craft_time_hours REAL,
+        difficulty TEXT,
+        weave_type TEXT,
+        materials TEXT,
+        colors TEXT,
+        care_instructions TEXT,
+        notes TEXT,
+        image_url TEXT NOT NULL,
+        additional_images TEXT,
+        tags TEXT,
+        featured INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
+      CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
+      CREATE INDEX IF NOT EXISTS idx_products_status ON products(status);
     `);
 
     return {

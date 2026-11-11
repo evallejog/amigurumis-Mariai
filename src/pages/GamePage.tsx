@@ -41,7 +41,7 @@ const LEVELS: LevelConfig[] = [
     difficulty: 'Fácil',
     targetWool: 12,
     timeLimitSeconds: 90,
-    rewardProposed: '5% de Descuento (BTL)',
+    rewardProposed: '5% de Descuento (Juego Pompón)',
     themeColor: 'from-emerald-500/20 to-teal-500/10',
     description: 'Aprende los movimientos de Pompón, recolecta ovillos sobre plataformas de fieltro y esquiva los primeros alfileres.',
   },
@@ -52,7 +52,7 @@ const LEVELS: LevelConfig[] = [
     difficulty: 'Intermedia',
     targetWool: 16,
     timeLimitSeconds: 120,
-    rewardProposed: '10% de Descuento (BTL)',
+    rewardProposed: '10% de Descuento (Juego Pompón)',
     themeColor: 'from-amber-500/20 to-orange-500/10',
     description: 'Sube a cintas métricas en movimiento y calcula el ritmo de las tijeras de costura para no deshilacharte.',
   },
@@ -63,7 +63,7 @@ const LEVELS: LevelConfig[] = [
     difficulty: 'Alta',
     targetWool: 22,
     timeLimitSeconds: 160,
-    rewardProposed: '15% de Descuento (BTL)',
+    rewardProposed: '15% de Descuento (Juego Pompón)',
     themeColor: 'from-purple-500/20 to-rose-500/10',
     description: 'Plataformas deshilachadas y saltos de máxima precisión con doble salto para alcanzar el canasto maestro.',
   },
@@ -380,7 +380,7 @@ export const GamePage: React.FC = () => {
             <div className="text-center max-w-2xl mx-auto space-y-3">
               <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full liquid-glass text-xs font-semibold text-amber-900 border border-amber-300/60 shadow-xs">
                 <Gamepad2 className="w-4 h-4 text-amber-700" />
-                <span>Minivideojuego BTL Oficial</span>
+                <span>Videojuego Oficial de Pompón</span>
               </div>
               <h1 className="text-3xl sm:text-4xl font-sans font-extrabold text-stone-900 tracking-tight">
                 Las Aventuras de Pompón
@@ -440,7 +440,7 @@ export const GamePage: React.FC = () => {
                       <div className="p-2.5 rounded-xl bg-amber-50/90 border border-amber-200/70 text-[11px] font-semibold text-amber-900 flex items-center justify-between">
                         <span className="flex items-center gap-1">
                           <Award className="w-3.5 h-3.5 text-amber-700" />
-                          <span>Premio BTL:</span>
+                          <span>Premio de Recompensa:</span>
                         </span>
                         <span className="font-bold">{lvl.rewardProposed}</span>
                       </div>
@@ -735,7 +735,7 @@ export const GamePage: React.FC = () => {
                 <div className="flex items-center justify-between text-xs font-bold text-amber-900">
                   <span className="flex items-center gap-1.5">
                     <Sparkles className="w-4 h-4 text-amber-600" />
-                    <span>Beneficio BTL Desbloqueado</span>
+                    <span>Beneficio del Juego Desbloqueado</span>
                   </span>
                   <span className="px-2 py-0.5 rounded-md bg-amber-200 text-amber-950 font-mono text-[11px]">
                     {rewardCoupon ? `${rewardCoupon.percent}% OFF` : currentLevelConfig.rewardProposed}

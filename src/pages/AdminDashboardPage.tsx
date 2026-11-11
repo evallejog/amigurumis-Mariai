@@ -36,6 +36,7 @@ import {
   Filter,
   Plus,
   X,
+  Menu,
   Calendar,
   History,
   ArrowRight,
@@ -136,6 +137,14 @@ const NEXT_ORDER_STATUS: Record<string, { next: string; label: string; color: st
   enviado: { next: 'entregado', label: 'Confirmar Entrega', color: 'bg-emerald-600 hover:bg-emerald-700 text-white' },
 };
 
+const ORDER_STATUS_LABELS: Record<string, string> = {
+  pedido_recibido: 'Pedido recibido',
+  en_preparacion: 'En preparación',
+  enviado: 'Enviado',
+  entregado: 'Entregado',
+  cancelado: 'Cancelado',
+};
+
 export const AdminDashboardPage: React.FC = () => {
   const navigate = useNavigate();
   const { user, token, isAuthenticated, isLoading: authLoading, logout, openAuthModal } = useAuth();
@@ -143,6 +152,28 @@ export const AdminDashboardPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [loadingData, setLoadingData] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState<boolean>(false);
+
+  // Lock body scroll and handle Escape key when mobile nav drawer is open
+  useEffect(() => {
+    if (!isMobileNavOpen) return;
+
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsMobileNavOpen(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isMobileNavOpen]);
 
   // Data states
   const [overview, setOverview] = useState<OverviewData | null>(null);
@@ -626,8 +657,166 @@ export const AdminDashboardPage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#FAF7F2] text-[#2E2823] font-sans flex flex-col lg:flex-row">
+      {/* MOBILE TOP BAR (lg:hidden) */}
+      <header className="lg:hidden sticky top-0 z-30 bg-white/95 border-b border-stone-200/80 px-4 py-3 flex items-center justify-between backdrop-blur-md shadow-xs">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setIsMobileNavOpen(true)}
+            aria-label="Abrir menú de navegación"
+            className="p-2 -ml-1 text-stone-700 hover:text-stone-950 hover:bg-stone-100 rounded-xl transition-colors cursor-pointer"
+          >
+            <Menu className="w-6 h-6" />
+          </button>
+          <div className="flex items-center gap-2">
+            <BrandLogo size="sm" />
+            <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-950 bg-amber-100/80 px-2 py-0.5 rounded-md border border-amber-300/60 font-sans">
+              Admin
+            </span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              if (activeTab === 'overview') loadOverview();
+              else if (activeTab === 'orders') loadOrders();
+              else if (activeTab === 'customers') loadCustomers();
+              else if (activeTab === 'coupons') loadCoupons();
+              else if (activeTab === 'btl') loadBtl();
+            }}
+            disabled={loadingData}
+            aria-label="Actualizar datos"
+            className="p-2 text-stone-600 hover:text-stone-950 hover:bg-stone-100 rounded-xl transition-colors cursor-pointer"
+          >
+            <RefreshCw className={`w-4 h-4 text-amber-700 ${loadingData ? 'animate-spin' : ''}`} />
+          </button>
+          <button
+            onClick={() => navigate('/')}
+            className="text-xs font-bold text-stone-600 hover:text-stone-900 px-2.5 py-1.5 rounded-xl border border-stone-200 bg-stone-50 transition-colors"
+          >
+            Tienda
+          </button>
+        </div>
+      </header>
+
+      {/* MOBILE DRAWER NAVIGATION */}
+      {isMobileNavOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden">
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 bg-stone-900/60 backdrop-blur-xs transition-opacity animate-fadeIn"
+            onClick={() => setIsMobileNavOpen(false)}
+            aria-hidden="true"
+          />
+
+          {/* Drawer Sheet */}
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Menú de navegación del panel administrativo"
+            className="fixed inset-y-0 left-0 w-72 max-w-[85vw] bg-white p-5 shadow-2xl flex flex-col justify-between overflow-y-auto z-50"
+          >
+            <div>
+              {/* Header inside drawer */}
+              <div className="flex items-center justify-between pb-4 mb-4 border-b border-stone-200/60">
+                <div>
+                  <BrandLogo size="sm" />
+                  <div className="flex items-center gap-1.5 mt-1.5">
+                    <ShieldCheck className="w-4 h-4 text-amber-700 shrink-0" />
+                    <span className="text-xs font-extrabold uppercase tracking-wider text-amber-950 font-sans">
+                      Panel Administrativo
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsMobileNavOpen(false)}
+                  aria-label="Cerrar menú"
+                  className="p-2 text-stone-500 hover:text-stone-900 hover:bg-stone-100 rounded-xl transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Navigation Links */}
+              <nav className="space-y-1">
+                {navItems.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => {
+                        setActiveTab(item.id);
+                        setIsMobileNavOpen(false);
+                      }}
+                      className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold font-sans transition-all cursor-pointer ${
+                        isActive
+                          ? 'bg-stone-900 text-white shadow-xs'
+                          : 'text-stone-600 hover:text-stone-950 hover:bg-stone-100/70'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <Icon className={`w-4 h-4 ${isActive ? 'text-amber-400' : 'text-stone-500'}`} />
+                        <span>{item.label}</span>
+                      </div>
+                      {item.badge && (
+                        <span
+                          className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                            isActive
+                              ? 'bg-white/20 text-white'
+                              : 'bg-stone-200 text-stone-700'
+                          }`}
+                        >
+                          {item.badge}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </nav>
+            </div>
+
+            {/* User Footer inside drawer */}
+            <div className="pt-4 border-t border-stone-200/60 space-y-2 mt-6">
+              <div className="p-2.5 rounded-xl bg-stone-100/80 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-stone-900 truncate max-w-[120px]">{user?.fullName}</span>
+                  <span className="px-1.5 py-0.5 rounded-md bg-amber-200/80 text-amber-950 font-extrabold text-[9px]">
+                    ADMIN
+                  </span>
+                </div>
+                <p className="text-[10px] text-stone-500 truncate mt-0.5">{user?.email}</p>
+              </div>
+
+              <button
+                onClick={() => {
+                  setIsMobileNavOpen(false);
+                  navigate('/');
+                }}
+                className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl border border-stone-200 text-stone-700 hover:text-stone-950 hover:bg-white text-xs font-bold transition-colors cursor-pointer"
+              >
+                <ArrowLeft className="w-3.5 h-3.5 text-stone-500" />
+                <span>Volver a la Tienda</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setIsMobileNavOpen(false);
+                  logout();
+                }}
+                className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-rose-600 hover:bg-rose-50 text-xs font-semibold transition-colors cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Cerrar Sesión</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* SIDEBAR NAVIGATION (DESKTOP) */}
-      <aside className="w-full lg:w-64 bg-white/85 border-b lg:border-b-0 lg:border-r border-stone-200/80 p-4 lg:p-6 flex flex-col justify-between shrink-0 backdrop-blur-2xl">
+      <aside className="hidden lg:flex lg:w-64 bg-white/85 border-r border-stone-200/80 p-6 flex-col justify-between shrink-0 backdrop-blur-2xl sticky top-0 h-screen overflow-y-auto">
         <div>
           {/* Brand Header */}
           <div className="mb-6 pb-4 border-b border-stone-200/60">
@@ -678,7 +867,7 @@ export const AdminDashboardPage: React.FC = () => {
         </div>
 
         {/* User Footer & Return to Store */}
-        <div className="pt-4 border-t border-stone-200/60 space-y-2 mt-6 lg:mt-0">
+        <div className="pt-4 border-t border-stone-200/60 space-y-2 mt-6">
           <div className="p-2.5 rounded-xl bg-stone-100/80 text-xs">
             <div className="flex items-center justify-between">
               <span className="font-bold text-stone-900 truncate max-w-[120px]">{user?.fullName}</span>
@@ -870,8 +1059,16 @@ export const AdminDashboardPage: React.FC = () => {
                           <td className="py-2.5 text-stone-600 whitespace-nowrap">{ord.customer_city || 'Bogotá D.C.'}</td>
                           <td className="py-2.5 font-bold whitespace-nowrap">{formatCOP(ord.total)}</td>
                           <td className="py-2.5 whitespace-nowrap">
-                            <span className="inline-flex items-center justify-center px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-900 text-[10px] font-bold whitespace-nowrap shrink-0 border border-emerald-300">
-                              {ord.status.replace('_', ' ')}
+                            <span className={`inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap shrink-0 border ${
+                              ord.status === 'entregado'
+                                ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                                : ord.status === 'enviado'
+                                ? 'bg-blue-100 text-blue-900 border-blue-300'
+                                : ord.status === 'en_preparacion'
+                                ? 'bg-amber-100 text-amber-900 border-amber-300'
+                                : 'bg-stone-200 text-stone-800 border-stone-300'
+                            }`}>
+                              {ORDER_STATUS_LABELS[ord.status] || ord.status.replace('_', ' ')}
                             </span>
                           </td>
                           <td className="py-2.5 text-stone-500 text-[11px] whitespace-nowrap">{ord.created_at?.split('T')[0]}</td>
@@ -917,13 +1114,13 @@ export const AdminDashboardPage: React.FC = () => {
                         setOrderStatusFilter(st);
                         loadOrders(1, st, orderSearch, orderStartDate, orderEndDate);
                       }}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer capitalize ${
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                         orderStatusFilter === st
                           ? 'bg-stone-900 text-white shadow-xs'
                           : 'bg-stone-200/70 text-stone-700 hover:bg-stone-300/60'
                       }`}
                     >
-                      {st.replace('_', ' ')}
+                      {st === 'todos' ? 'Todos los estados' : ORDER_STATUS_LABELS[st] || st.replace('_', ' ')}
                     </button>
                   ))}
                 </div>
@@ -1056,7 +1253,7 @@ export const AdminDashboardPage: React.FC = () => {
                                     : 'bg-stone-200 text-stone-800 border border-stone-300'
                                 }`}
                               >
-                                {ord.status.replace('_', ' ')}
+                                {ORDER_STATUS_LABELS[ord.status] || ord.status.replace('_', ' ')}
                               </span>
                             </td>
                             <td className="py-3 px-4 text-stone-500 text-[11px] whitespace-nowrap">

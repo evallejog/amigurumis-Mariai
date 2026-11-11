@@ -48,6 +48,7 @@ export const CheckoutModal: React.FC = () => {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('bank_transfer');
   const [isProcessing, setIsProcessing] = useState(false);
   const [confirmedOrder, setConfirmedOrder] = useState<any>(null);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
 
   // Coupon state
   const [couponInput, setCouponInput] = useState('');
@@ -82,6 +83,7 @@ export const CheckoutModal: React.FC = () => {
         setCouponSuccess(null);
         setCouponError(null);
         setCouponInput('');
+        setPaymentError(null);
       }
 
       // Check if there is an earned coupon waiting to be used
@@ -119,6 +121,7 @@ export const CheckoutModal: React.FC = () => {
       setCouponError(null);
       setCouponInput('');
       setFormErrors({});
+      setPaymentError(null);
       setIsProcessing(false);
     }, 200);
   };
@@ -178,7 +181,10 @@ export const CheckoutModal: React.FC = () => {
     try {
       const res = await fetch('/api/coupons/validate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({
           code,
           subtotal,
@@ -225,12 +231,14 @@ export const CheckoutModal: React.FC = () => {
     e.preventDefault();
     if (validateDetails()) {
       setCalculatedShipping(currentShippingCost);
+      setPaymentError(null);
       setStep('payment');
     }
   };
 
   const handleCompletePayment = async () => {
     setIsProcessing(true);
+    setPaymentError(null);
 
     const payload = {
       customer,
@@ -264,27 +272,7 @@ export const CheckoutModal: React.FC = () => {
       setStep('confirmation');
       clearCart();
     } catch (err: any) {
-      console.warn('Fallback local order generation:', err);
-      const fallbackOrder: any = {
-        id: `AMI-CO-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`,
-        orderId: `AMI-CO-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`,
-        orderNumber: `ORD-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
-        createdAt: new Date().toISOString(),
-        customer,
-        shippingMethod,
-        paymentMethod,
-        couponCode: appliedCoupon?.code,
-        items,
-        subtotal,
-        shippingCost: currentShippingCost,
-        discount: discountAmount,
-        total: finalCalculatedTotal,
-        status: 'confirmed',
-      };
-      setConfirmedOrder(fallbackOrder);
-      setLastOrder(fallbackOrder);
-      setStep('confirmation');
-      clearCart();
+      setPaymentError(err.message || 'Error de conexión al registrar el pedido.');
     } finally {
       setIsProcessing(false);
     }
@@ -297,7 +285,7 @@ export const CheckoutModal: React.FC = () => {
       .join('\n');
 
     const discountSummary = (confirmedOrder.discount || 0) > 0
-      ? `\n*Descuento (${confirmedOrder.couponCode || 'BTL'}):* -$ ${(confirmedOrder.discount || 0).toLocaleString('es-CO')} COP`
+      ? `\n*Descuento (${confirmedOrder.couponCode || 'Promoción'}):* -$ ${(confirmedOrder.discount || 0).toLocaleString('es-CO')} COP`
       : '';
 
     const msg = `¡Hola Amigurumis Mariai! Acabo de registrar mi pedido en la web con el número *${confirmedOrder.orderNumber || confirmedOrder.orderId}*.\n\n*Resumen:*\n${itemsSummary}\n\n*Subtotal:* $ ${confirmedOrder.subtotal.toLocaleString('es-CO')} COP${discountSummary}\n*Envío (${confirmedOrder.shippingMethod}):* $ ${confirmedOrder.shippingCost.toLocaleString('es-CO')} COP\n*Total:* $ ${confirmedOrder.total.toLocaleString('es-CO')} COP\n*Ciudad de Entrega:* ${confirmedOrder.customer?.city || confirmedOrder.shippingCity}\n*Cliente:* ${confirmedOrder.customer?.fullName || confirmedOrder.customerName}\n\nQuedo atento/a para coordinar los detalles de confección y despacho en Colombia. ¡Muchas gracias!`;
@@ -307,7 +295,7 @@ export const CheckoutModal: React.FC = () => {
   const handleDownloadReceipt = () => {
     if (!confirmedOrder) return;
     const discountLine = (confirmedOrder.discount || 0) > 0
-      ? `Descuento cupón (${confirmedOrder.couponCode || 'BTL'}): -$ ${(confirmedOrder.discount || 0).toLocaleString('es-CO')} COP\n`
+      ? `Descuento cupón (${confirmedOrder.couponCode || 'Promoción'}): -$ ${(confirmedOrder.discount || 0).toLocaleString('es-CO')} COP\n`
       : '';
 
     const content = `================================================
@@ -564,7 +552,7 @@ Gracias por apoyar el talento y tejido hecho a mano.
                 </label>
                 {pendingCouponCode && (
                   <span className="text-[11px] text-amber-800 font-semibold">
-                    ¡Cupón BTL listo para aplicar!
+                    ¡Cupón de recompensa listo para aplicar!
                   </span>
                 )}
               </div>
@@ -757,6 +745,13 @@ Gracias por apoyar el talento y tejido hecho a mano.
               </div>
             )}
 
+            {paymentError && (
+              <div className="p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2">
+                <AlertIcon className="w-4 h-4 shrink-0 text-rose-600" />
+                <span>{paymentError}</span>
+              </div>
+            )}
+
             {/* Back button and Confirm button */}
             <div className="flex items-center justify-between pt-4 border-t border-stone-200/50">
               <button
@@ -844,7 +839,7 @@ Gracias por apoyar el talento y tejido hecho a mano.
                 </div>
                 {(confirmedOrder.discount || 0) > 0 && (
                   <div className="flex justify-between text-emerald-700 font-semibold">
-                    <span>Descuento cupón {confirmedOrder.couponCode ? `(${confirmedOrder.couponCode})` : 'BTL'}:</span>
+                    <span>Descuento cupón {confirmedOrder.couponCode ? `(${confirmedOrder.couponCode})` : 'Promoción'}:</span>
                     <span className="tabular-nums">-$ {(confirmedOrder.discount || 0).toLocaleString('es-CO')} COP</span>
                   </div>
                 )}

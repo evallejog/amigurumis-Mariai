@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { Product, CartItem, OrderDetails } from '../types';
+import { useAuth } from './AuthContext';
 
 interface CartContextType {
   items: CartItem[];
@@ -25,14 +26,26 @@ interface CartContextType {
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
-const STORAGE_KEY = 'amigurumis_mariai_cart_v2';
-const LEGACY_STORAGE_KEY = 'atelier_amigurumi_cart_v1';
-const PENDING_COUPON_KEY = 'amigurumis_mariai_pending_coupon';
+export const getCartStorageKey = (userId?: string | null) => {
+  return userId ? `amigurumis_mariai_cart_user_${userId}` : 'amigurumis_mariai_cart_guest';
+};
+
+export const getCouponStorageKey = (userId?: string | null) => {
+  return userId ? `amigurumis_mariai_coupon_user_${userId}` : 'amigurumis_mariai_coupon_guest';
+};
+
+const LEGACY_STORAGE_KEY = 'amigurumis_mariai_cart_v2';
+const LEGACY_PENDING_KEY = 'amigurumis_mariai_pending_coupon';
 
 export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user } = useAuth();
+  const currentUserId = user?.id || null;
+  const activeUserRef = useRef<string | null>(currentUserId);
+
   const [items, setItems] = useState<CartItem[]>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY);
+      const key = getCartStorageKey(currentUserId);
+      const saved = localStorage.getItem(key) || (!currentUserId ? localStorage.getItem(LEGACY_STORAGE_KEY) : null);
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
@@ -41,35 +54,80 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const [pendingCouponCode, setPendingCouponCodeState] = useState<string | null>(() => {
     try {
-      return localStorage.getItem(PENDING_COUPON_KEY);
+      const key = getCouponStorageKey(currentUserId);
+      return localStorage.getItem(key) || (!currentUserId ? localStorage.getItem(LEGACY_PENDING_KEY) : null);
     } catch {
       return null;
     }
   });
-
-  const setPendingCouponCode = (code: string | null) => {
-    setPendingCouponCodeState(code);
-    try {
-      if (code) {
-        localStorage.setItem(PENDING_COUPON_KEY, code);
-      } else {
-        localStorage.removeItem(PENDING_COUPON_KEY);
-      }
-    } catch {}
-  };
 
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [lastOrder, setLastOrder] = useState<OrderDetails | null>(null);
   const [shippingCost, setShippingCost] = useState<number | null>(null);
 
+  // Switch cart and coupon when authenticated user changes (prevents bleed between accounts)
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-    } catch (e) {
-      console.error('Error saving cart to local storage', e);
+    const prevUserId = activeUserRef.current;
+    if (prevUserId !== currentUserId) {
+      // 1. Save previous state to previous user's keys
+      try {
+        const prevCartKey = getCartStorageKey(prevUserId);
+        const prevCouponKey = getCouponStorageKey(prevUserId);
+        localStorage.setItem(prevCartKey, JSON.stringify(items));
+        if (pendingCouponCode) {
+          localStorage.setItem(prevCouponKey, pendingCouponCode);
+        } else {
+          localStorage.removeItem(prevCouponKey);
+        }
+      } catch (e) {
+        console.error('Error saving previous cart state', e);
+      }
+
+      // 2. Load new user's cart and coupon
+      try {
+        const newCartKey = getCartStorageKey(currentUserId);
+        const newCouponKey = getCouponStorageKey(currentUserId);
+        const savedNewCart = localStorage.getItem(newCartKey);
+        const parsedItems: CartItem[] = savedNewCart ? JSON.parse(savedNewCart) : [];
+        setItems(parsedItems);
+
+        const savedNewCoupon = localStorage.getItem(newCouponKey);
+        setPendingCouponCodeState(savedNewCoupon || null);
+      } catch (e) {
+        console.error('Error loading new user cart state', e);
+        setItems([]);
+        setPendingCouponCodeState(null);
+      }
+
+      setShippingCost(null);
+      activeUserRef.current = currentUserId;
     }
-  }, [items]);
+  }, [currentUserId]);
+
+  const setPendingCouponCode = (code: string | null) => {
+    setPendingCouponCodeState(code);
+    try {
+      const key = getCouponStorageKey(currentUserId);
+      if (code) {
+        localStorage.setItem(key, code);
+      } else {
+        localStorage.removeItem(key);
+      }
+    } catch {}
+  };
+
+  // Sync current items with current active user's storage key
+  useEffect(() => {
+    if (activeUserRef.current === currentUserId) {
+      try {
+        const key = getCartStorageKey(currentUserId);
+        localStorage.setItem(key, JSON.stringify(items));
+      } catch (e) {
+        console.error('Error saving cart to local storage', e);
+      }
+    }
+  }, [items, currentUserId]);
 
   const addToCart = (product: Product, quantity = 1, customDetails?: CartItem['customDetails']) => {
     setItems((prev) => {
@@ -118,6 +176,13 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const clearCart = () => {
     setItems([]);
     setShippingCost(null);
+    setPendingCouponCodeState(null);
+    try {
+      const cartKey = getCartStorageKey(currentUserId);
+      const couponKey = getCouponStorageKey(currentUserId);
+      localStorage.removeItem(cartKey);
+      localStorage.removeItem(couponKey);
+    } catch {}
   };
 
   const setCalculatedShipping = (cost: number | null) => {

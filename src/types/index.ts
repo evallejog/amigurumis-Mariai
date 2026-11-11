@@ -7,25 +7,36 @@ export type ProductAvailability = 'in_stock' | 'low_stock' | 'made_to_order' | '
 
 export interface Product {
   id: string;
+  sku?: string;
   name: string;
-  category: 'animales' | 'marinos' | 'fantasia' | 'botanica' | 'personalizados';
+  category: 'animales' | 'marinos' | 'fantasia' | 'botanica' | 'personalizados' | string;
   shortDescription: string;
   fullDescription: string;
   price: number;
   currency: string;
   availability: ProductAvailability;
   stockUnits?: number;
+  lowStockThreshold?: number;
+  status?: 'published' | 'hidden' | 'out_of_stock';
   dimensions?: {
     heightCm: number;
     widthCm: number;
+    depthCm?: number;
   };
   materials: string[];
+  colors?: string;
+  weaveType?: string;
+  careInstructions?: string;
+  notes?: string;
   approxCraftTimeHours?: number;
   featured?: boolean;
   imagePlaceholderText?: string;
   imageUrl?: string;
+  additionalImages?: string[];
   tags: string[];
-  difficulty?: 'Principiante' | 'Intermedio' | 'Avanzado';
+  difficulty?: 'Básica' | 'Intermedia' | 'Avanzada' | 'Experta' | 'Principiante' | 'Intermedio' | 'Avanzado' | string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface CategoryOption {

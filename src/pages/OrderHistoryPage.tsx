@@ -186,34 +186,42 @@ export const OrderHistoryPage: React.FC = () => {
 
   const getStatusBadge = (status: string) => {
     const st = status.toLowerCase();
-    if (st.includes('confirmado') || st.includes('preparación') || st.includes('pagado')) {
+    if (st === 'pedido_recibido' || st.includes('recibido')) {
       return (
-        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300">
+        <span className="inline-flex items-center justify-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-stone-200 text-stone-900 border border-stone-300 whitespace-nowrap shrink-0 shadow-2xs">
+          <Package className="w-3.5 h-3.5" />
+          <span>Pedido recibido</span>
+        </span>
+      );
+    }
+    if (st === 'en_preparacion' || st.includes('preparacion') || st.includes('preparación') || st.includes('confirmado') || st.includes('pagado')) {
+      return (
+        <span className="inline-flex items-center justify-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300 whitespace-nowrap shrink-0 shadow-2xs">
           <Clock className="w-3.5 h-3.5" />
-          <span>En Preparación Artesanal</span>
+          <span>En preparación</span>
         </span>
       );
     }
-    if (st.includes('enviado')) {
+    if (st === 'enviado' || st.includes('enviado')) {
       return (
-        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-900 border border-blue-300">
+        <span className="inline-flex items-center justify-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-900 border border-blue-300 whitespace-nowrap shrink-0 shadow-2xs">
           <Truck className="w-3.5 h-3.5" />
-          <span>Enviado por Coordinadora / Servientrega</span>
+          <span>Enviado</span>
         </span>
       );
     }
-    if (st.includes('entregado')) {
+    if (st === 'entregado' || st.includes('entregado')) {
       return (
-        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-900 border border-emerald-300">
+        <span className="inline-flex items-center justify-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-900 border border-emerald-300 whitespace-nowrap shrink-0 shadow-2xs">
           <CheckCircle2 className="w-3.5 h-3.5" />
-          <span>Entregado a Satisfacción</span>
+          <span>Entregado</span>
         </span>
       );
     }
     return (
-      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-stone-100 text-stone-800 border border-stone-300">
+      <span className="inline-flex items-center justify-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-stone-100 text-stone-800 border border-stone-300 whitespace-nowrap shrink-0 shadow-2xs">
         <Package className="w-3.5 h-3.5" />
-        <span>{status}</span>
+        <span>{status.replace('_', ' ')}</span>
       </span>
     );
   };
@@ -259,7 +267,7 @@ export const OrderHistoryPage: React.FC = () => {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-stone-200">
           <div>
             <h1 className="text-2xl sm:text-3xl font-sans font-extrabold text-stone-900">
-              {activeTab === 'orders' ? 'Mis Compras & Pedidos' : 'Mis Cupones & Recompensas BTL'}
+              {activeTab === 'orders' ? 'Mis Compras & Pedidos' : 'Mis Cupones & Recompensas'}
             </h1>
             <p className="text-xs sm:text-sm text-stone-600 mt-1">
               {activeTab === 'orders'
@@ -322,7 +330,7 @@ export const OrderHistoryPage: React.FC = () => {
               }`}
             >
               <Gift className="w-3.5 h-3.5 text-amber-600" />
-              <span>Mis Cupones & Recompensas BTL ({personalCoupons.length})</span>
+              <span>Mis Cupones & Recompensas ({personalCoupons.length})</span>
             </button>
           </div>
         )}
@@ -463,7 +471,7 @@ export const OrderHistoryPage: React.FC = () => {
                         <div>
                           {order.discount > 0 && (
                             <p className="text-[11px] text-emerald-700 font-semibold">
-                              Descuento {order.couponCode ? `(${order.couponCode})` : 'BTL'}: -{formatCOP(order.discount)}
+                              Descuento {order.couponCode ? `(${order.couponCode})` : 'Promoción'}: -{formatCOP(order.discount)}
                             </p>
                           )}
                           <p className="text-[11px] text-stone-500">
@@ -496,14 +504,14 @@ export const OrderHistoryPage: React.FC = () => {
                 <div>
                   <h3 className="text-base font-bold text-stone-900 flex items-center gap-2">
                     <Gift className="w-4 h-4 text-amber-600" />
-                    <span>Tus Cupones Exclusivos & Recompensas BTL</span>
+                    <span>Tus Cupones Exclusivos & Recompensas del Juego</span>
                   </h3>
                   <p className="text-xs text-stone-500">
                     Cupones vinculados exclusivamente a tu cuenta ({user?.email})
                   </p>
                 </div>
                 <button
-                  onClick={() => navigate('/#btl-game')}
+                  onClick={() => navigate('/#juego')}
                   className="text-xs font-bold text-amber-700 hover:text-amber-800 flex items-center gap-1 cursor-pointer"
                 >
                   <Gamepad2 className="w-3.5 h-3.5" />
@@ -518,15 +526,15 @@ export const OrderHistoryPage: React.FC = () => {
                   <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center mx-auto">
                     <Gamepad2 className="w-6 h-6" />
                   </div>
-                  <h4 className="text-sm font-bold text-stone-900">Aún no tienes recompensas BTL activas</h4>
+                  <h4 className="text-sm font-bold text-stone-900">Aún no tienes recompensas del juego activas</h4>
                   <p className="text-xs text-stone-600 leading-relaxed">
                     Supera los niveles en "Las Aventuras de Pompón" para desbloquear cupones únicos del 5%, 10% y 15% OFF asociados a tu cuenta.
                   </p>
                   <button
-                    onClick={() => navigate('/#btl-game')}
+                    onClick={() => navigate('/jugar')}
                     className="py-2 px-4 rounded-xl liquid-btn-primary text-white text-xs font-bold cursor-pointer"
                   >
-                    Ir al Videojuego BTL
+                    Ir al Videojuego Pompón
                   </button>
                 </div>
               ) : (
@@ -558,7 +566,7 @@ export const OrderHistoryPage: React.FC = () => {
                                   : 'bg-amber-100 text-amber-900 border border-amber-300'
                               }`}
                             >
-                              {isBtl ? 'Recompensa BTL' : 'Exclusivo Cliente'}
+                              {isBtl ? 'Recompensa del Juego' : 'Exclusivo Cliente'}
                             </span>
                           </div>
 
@@ -681,6 +689,7 @@ export const OrderHistoryPage: React.FC = () => {
               </div>
             )}
           </div>
+        )}
       </main>
     </div>
   );

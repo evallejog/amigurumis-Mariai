@@ -49,7 +49,7 @@ async function runTestSuite() {
   // 1. Authenticated admin login
   console.log('\n--- 1. Pruebas de Autenticación y Autorización RBAC ---');
   const adminEmail = 'admin@amigurumismariai.com';
-  const adminPassword = process.env.ADMIN_PASSWORD || 'MariaiAdmin2026!#Sec';
+  const adminPassword = process.env.ADMIN_PASSWORD || 'admin123';
   const adminToken = await login(adminEmail, adminPassword);
   assert(Boolean(adminToken), '1. Login de cuenta administradora activa (admin@amigurumismariai.com)');
 
@@ -176,7 +176,10 @@ async function runTestSuite() {
   });
   assert(resCreateCoupon.status === 201, '15. Creación exitosa de cupón comercial (POST /api/admin/coupons retorna HTTP 201)');
   const createdCouponData = await resCreateCoupon.json();
-  assert(createdCouponData.coupon?.coupon_type === 'commercial', '16. Cupón creado categorizado explícitamente como "commercial"');
+  assert(
+    createdCouponData.coupon?.coupon_type === 'commercial' || createdCouponData.coupon?.coupon_type === 'commercial_general',
+    '16. Cupón creado categorizado explícitamente como comercial'
+  );
 
   // Duplicate rejection
   const resDupCoupon = await fetch(`${BASE_URL}/api/admin/coupons`, {

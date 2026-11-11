@@ -66,7 +66,7 @@ export const BottomNavBar: React.FC<BottomNavBarProps> = ({
     },
     {
       id: 'juego',
-      label: 'Jugar BTL',
+      label: 'Jugar',
       icon: Gamepad2,
       badge: 'PROMO',
       action: () => {
@@ -237,7 +237,7 @@ export const BottomNavBar: React.FC<BottomNavBarProps> = ({
           <div className="p-3 rounded-2xl bg-amber-50/90 border border-amber-200/60 text-[11px] text-amber-900 flex items-start gap-2.5">
             <Sparkles className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <div>
-              <p className="font-bold">Minijuego BTL Activo</p>
+              <p className="font-bold">Videojuego Pompón Activo</p>
               <p className="text-amber-800/80 text-[10px] font-normal">
                 Juega con Pompón en /jugar para obtener hasta 15% de beneficio promocional en tu orden.
               </p>

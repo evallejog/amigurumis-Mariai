@@ -23,9 +23,9 @@ export const AboutSection: React.FC = () => {
     },
     {
       icon: Sparkles,
-      title: 'Innovación y Experiencia BTL',
+      title: 'Innovación y Experiencia Lúdica',
       description:
-        'Fusionamos el amor por el tejido tradicional con experiencias lúdicas e interactivas. A través de nuestro videojuego y dinámicas BTL, celebramos el crochet de forma divertida, cercana y gratificante.',
+        'Fusionamos el amor por el tejido tradicional con experiencias lúdicas e interactivas. A través de nuestro videojuego y dinámicas promocionales, celebramos el crochet de forma divertida, cercana y gratificante.',
     },
   ];
 

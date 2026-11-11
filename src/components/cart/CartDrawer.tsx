@@ -74,7 +74,7 @@ export const CartDrawer: React.FC = () => {
                 </div>
                 <h3 className="text-base font-sans font-bold text-stone-800 mb-1">Tu bolsa está vacía</h3>
                 <p className="text-sm text-stone-500 max-w-xs mb-6 font-normal">
-                  Descubre piezas únicas en nuestro catálogo o supera los niveles de nuestro minivideojuego BTL para obtener beneficios especiales.
+                  Descubre piezas únicas en nuestro catálogo o supera los niveles de nuestro videojuego Pompón para obtener beneficios especiales.
                 </p>
                 <button
                   onClick={() => setIsCartOpen(false)}
@@ -197,7 +197,7 @@ export const CartDrawer: React.FC = () => {
                   <div className="p-2.5 rounded-xl bg-amber-50/90 border border-amber-200/80 flex items-center justify-between text-xs text-amber-900 font-semibold">
                     <span className="flex items-center gap-1.5">
                       <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                      <span>Cupón BTL listo:</span>
+                      <span>Cupón de recompensa listo:</span>
                     </span>
                     <span className="font-mono font-bold">{pendingCouponCode}</span>
                   </div>
