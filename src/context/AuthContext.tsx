@@ -104,10 +104,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
     try {
+      const normalizedEmail = (email || '').trim().toLowerCase();
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: normalizedEmail, password }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -134,10 +135,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     department?: string;
   }): Promise<{ success: boolean; error?: string }> => {
     try {
+      const normalizedData = {
+        ...data,
+        email: (data.email || '').trim().toLowerCase(),
+        fullName: (data.fullName || '').trim(),
+      };
       const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        body: JSON.stringify(normalizedData),
       });
       const resData = await res.json();
       if (!res.ok) {

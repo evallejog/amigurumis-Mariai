@@ -43,7 +43,7 @@ export const AuthModal: React.FC = () => {
     e.preventDefault();
     setErrorMessage(null);
     setLoading(true);
-    const result = await login(email, password);
+    const result = await login(email.trim().toLowerCase(), password);
     setLoading(false);
     if (!result.success) {
       setErrorMessage(result.error || 'Credenciales inválidas');
@@ -53,15 +53,31 @@ export const AuthModal: React.FC = () => {
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
+    const trimmedEmail = email.trim().toLowerCase();
+    const trimmedName = fullName.trim();
+
+    if (!trimmedName) {
+      setErrorMessage('Por favor ingresa tu nombre completo.');
+      return;
+    }
+    if (!trimmedEmail) {
+      setErrorMessage('Por favor ingresa un correo electrónico válido.');
+      return;
+    }
+    if (password.length < 6) {
+      setErrorMessage('La contraseña debe tener al menos 6 caracteres.');
+      return;
+    }
+
     setLoading(true);
     const result = await register({
-      email,
+      email: trimmedEmail,
       password,
-      fullName,
-      phone,
-      address,
-      city,
-      department,
+      fullName: trimmedName,
+      phone: phone.trim(),
+      address: address.trim(),
+      city: city.trim(),
+      department: department.trim(),
     });
     setLoading(false);
     if (!result.success) {

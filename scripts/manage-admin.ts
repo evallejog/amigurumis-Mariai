@@ -12,6 +12,10 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const dataDir = path.resolve(process.cwd(), 'data');
 const dbPath = path.join(dataDir, 'amigurumis_mariai.db');
@@ -22,9 +26,17 @@ if (!fs.existsSync(dbPath)) {
 }
 
 const db = new Database(dbPath);
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
 
 const command = process.argv[2];
-const targetEmail = process.argv[3];
+const targetEmailOrPassword = process.argv[3];
+
+function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${hash}`;
+}
 
 function listUsers() {
   console.log('\n=== LISTADO DE USUARIOS REGISTRADOS ===');
@@ -121,15 +133,87 @@ function demoteUser(email: string) {
   }
 }
 
+// Fase 2F.1.2: Aprovisionamiento seguro de cuenta administrativa demo
+function provisionAdminDemo(customPassword?: string) {
+  const DEMO_EMAIL = 'admin.demo@amigurumismariai.test';
+  const rawPassword = customPassword || process.env.ADMIN_DEMO_PASSWORD;
+
+  // Requisito 7: Si no hay contraseña configurada ni mecanismo de entrega confidencial fuera de banda,
+  // detener el aprovisionamiento antes de crear una cuenta inaccesible.
+  if (!rawPassword || rawPassword.trim().length < 6) {
+    console.warn(`
+[AVISO DE SEGURIDAD - FASE 2F.1.2 / REQUISITO 7]
+Google AI Studio no cuenta con un baúl de secretos (Secret Manager) con entrega ciega al cliente.
+Para evitar crear una cuenta administrativa huérfana e inaccesible, el aprovisionamiento requiere
+que la contraseña sea suministrada de forma privada mediante la variable de entorno ADMIN_DEMO_PASSWORD
+(en el archivo no versionado .env) o como argumento del comando CLI:
+
+  npx tsx scripts/manage-admin.ts provision-demo <contraseña_elegida>
+  O bien configurando ADMIN_DEMO_PASSWORD=<tu_clave> en .env
+
+No se creará una cuenta con contraseña desconocida ni predeterminada.
+`);
+    return;
+  }
+
+  const passwordHash = hashPassword(rawPassword.trim());
+  const nowIso = new Date().toISOString();
+
+  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(DEMO_EMAIL) as any;
+
+  if (existing) {
+    db.prepare(`
+      UPDATE users
+      SET password_hash = ?, role = 'admin'
+      WHERE email = ?
+    `).run(passwordHash, DEMO_EMAIL);
+    console.log(`[ÉXITO] Cuenta administrativa demo actualizada: ${DEMO_EMAIL} con rol 'admin'.`);
+  } else {
+    const userId = `usr-admin-demo-${Date.now().toString(36)}`;
+    db.prepare(`
+      INSERT INTO users (id, name, email, password_hash, provider, role, created_at)
+      VALUES (?, 'Administrador Demo', ?, ?, 'local', 'admin', ?)
+    `).run(userId, DEMO_EMAIL, passwordHash, nowIso);
+    console.log(`[ÉXITO] Cuenta administrativa demo aprovisionada: ${DEMO_EMAIL} con rol 'admin'.`);
+  }
+  console.log('Credencial protegida con hash scrypt nativo. La contraseña no fue expuesta en logs ni versionada.');
+}
+
+// Fase 2F.1.2: Deshabilitación / Eliminación de cuenta demo para preparación a producción
+function removeAdminDemo() {
+  const DEMO_EMAIL = 'admin.demo@amigurumismariai.test';
+  const user = db.prepare('SELECT id FROM users WHERE email = ?').get(DEMO_EMAIL) as any;
+
+  if (!user) {
+    console.log(`[INFO] La cuenta demo ${DEMO_EMAIL} no existe en la base de datos.`);
+    return;
+  }
+
+  // Eliminar sesiones asociadas y el usuario demo exclusivamente
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
+  const info = db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
+
+  if (info.changes > 0) {
+    console.log(`[ÉXITO] Cuenta administrativa demo ${DEMO_EMAIL} eliminada de forma segura para producción.`);
+  }
+}
+
 switch (command) {
   case 'list':
     listUsers();
     break;
   case 'promote':
-    promoteUser(targetEmail);
+    promoteUser(targetEmailOrPassword);
     break;
   case 'demote':
-    demoteUser(targetEmail);
+    demoteUser(targetEmailOrPassword);
+    break;
+  case 'provision-demo':
+  case 'create-demo':
+    provisionAdminDemo(targetEmailOrPassword);
+    break;
+  case 'remove-demo':
+    removeAdminDemo();
     break;
   default:
     console.log(`
@@ -140,9 +224,12 @@ Comandos disponibles:
   npx tsx scripts/manage-admin.ts list
   npx tsx scripts/manage-admin.ts promote <email>
   npx tsx scripts/manage-admin.ts demote <email>
+  npx tsx scripts/manage-admin.ts provision-demo [password]
+  npx tsx scripts/manage-admin.ts remove-demo
 
 Ejemplo:
   npx tsx scripts/manage-admin.ts promote maria@amigurumismariai.com
+  npx tsx scripts/manage-admin.ts provision-demo
 `);
     break;
 }

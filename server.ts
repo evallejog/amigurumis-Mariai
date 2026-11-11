@@ -24,16 +24,16 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Helper to authenticate user from secure HTTP-only cookie or Bearer header
+// Helper to authenticate user: prioritize explicit Authorization Bearer header over cookies
 function getAuthUser(req: express.Request): any | null {
-  const cookieToken = req.cookies?.amigurumis_mariai_session;
   const authHeader = req.headers.authorization;
+  const cookieToken = req.cookies?.amigurumis_mariai_session;
   let token: string | null = null;
 
-  if (cookieToken && typeof cookieToken === 'string') {
-    token = cookieToken.trim();
-  } else if (authHeader && authHeader.startsWith('Bearer ')) {
+  if (authHeader && authHeader.startsWith('Bearer ')) {
     token = authHeader.substring(7).trim();
+  } else if (cookieToken && typeof cookieToken === 'string') {
+    token = cookieToken.trim();
   }
 
   if (!token) {
@@ -71,24 +71,29 @@ async function startServer() {
   const app = express();
   const PORT = parseInt(process.env.PORT || '3000', 10);
 
-  // Trust reverse proxies (Render, Cloud Run, Cloudflare)
-  app.set('trust proxy', 1);
+  // Trust reverse proxies (Google Cloud Run / Load Balancer)
+  app.set('trust proxy', true);
 
-  // Security Headers via Helmet (CSP relaxed to allow Canvas/Phaser vector graphics and Google Fonts)
+  // Security Headers via Helmet configured for AI Studio iFrame and Canvas/Phaser graphics
   app.use(
     helmet({
       contentSecurityPolicy: false,
       crossOriginEmbedderPolicy: false,
+      crossOriginResourcePolicy: false,
+      crossOriginOpenerPolicy: false,
+      frameguard: false,
     })
   );
 
   app.use(cookieParser());
   app.use(express.json({ limit: '2mb' }));
 
-  // Rate Limiting to prevent denial of service and brute force
+  // Rate Limiting: relaxed in development / testing to prevent proxy-level lockout
+  const isDev = process.env.NODE_ENV !== 'production';
+
   const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 250,
+    max: isDev ? 1000 : 250,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Demasiadas solicitudes desde esta IP. Intenta de nuevo en unos minutos.' },
@@ -96,7 +101,7 @@ async function startServer() {
 
   const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 25,
+    max: isDev ? 500 : 25,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Demasiados intentos de autenticación. Intenta de nuevo en 15 minutos.' },
@@ -104,7 +109,7 @@ async function startServer() {
 
   const couponLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 40,
+    max: isDev ? 500 : 40,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Límite de validación de cupones alcanzado. Intenta más tarde.' },
@@ -135,9 +140,20 @@ async function startServer() {
         return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres.' });
       }
 
-      const normalizedEmail = email.trim().toLowerCase();
+      const normalizedEmail = (email || '').trim().toLowerCase();
+
+      if (!userName || !normalizedEmail || !password) {
+        return res.status(400).json({ error: 'Nombre, correo y contraseña son obligatorios.' });
+      }
+      if (password.length < 6) {
+        return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres.' });
+      }
+
+      console.log(`[AUTH] Intento de registro recibido para: ${normalizedEmail}`);
+
       const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(normalizedEmail);
       if (existing) {
+        console.warn(`[AUTH] Conflicto: el correo ya existe: ${normalizedEmail}`);
         return res.status(409).json({ error: 'Ya existe una cuenta con este correo electrónico.' });
       }
 
@@ -168,11 +184,13 @@ async function startServer() {
         VALUES (?, ?, ?, ?)
       `).run(token, userId, createdAt, expiresAt);
 
-      // Set secure HTTP-only session cookie
+      console.log(`[AUTH] Usuario registrado exitosamente en DB: ${userId} (${normalizedEmail})`);
+
+      // Set session cookie (partitioned for iframe support)
       res.cookie('amigurumis_mariai_session', token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
+        secure: true,
+        sameSite: 'none',
         maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
       });
 
@@ -192,7 +210,7 @@ async function startServer() {
         },
       });
     } catch (err: any) {
-      console.error('Error during registration:', err);
+      console.error('[AUTH] Error fatal durante registro:', err);
       return res.status(500).json({ error: 'Error interno en el registro.' });
     }
   });
