@@ -22,10 +22,14 @@ import { GamePage } from './pages/GamePage';
 import { OrderHistoryPage } from './pages/OrderHistoryPage';
 import { AdminDashboardPage } from './pages/AdminDashboardPage';
 import { Product } from './types';
+import { AnalyticsConsent } from './components/common/AnalyticsConsent';
+import { track } from './analytics/client';
 
 function MainStoreView() {
   const navigate = useNavigate();
   const [activeSection, setActiveSection] = useState<string>('inicio');
+
+  useEffect(() => { track({ event_id: crypto.randomUUID(), event_type: 'page_viewed', metadata: { page: 'store' } }); }, []);
 
   // Single source of truth lock for programmatic navigation (prevents indicator flicker)
   const isProgrammaticScrollRef = useRef<boolean>(false);
@@ -199,6 +203,7 @@ export default function App() {
           <AuthModal />
           <CartDrawer />
           <CheckoutModal />
+          <AnalyticsConsent />
         </CartProvider>
       </AuthProvider>
     </BrowserRouter>

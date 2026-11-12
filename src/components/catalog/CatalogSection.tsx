@@ -5,6 +5,7 @@ import { ProductCard } from './ProductCard';
 import { ProductDetailModal } from './ProductDetailModal';
 import { Search, Sparkles, RefreshCw, AlertCircle } from 'lucide-react';
 import { CustomSortSelect, SortOptionValue } from './CustomSortSelect';
+import { track } from '../../analytics/client';
 
 interface CatalogSectionProps {
   onInquireWhatsApp?: (product: Product) => void;
@@ -27,6 +28,23 @@ export const CatalogSection: React.FC<CatalogSectionProps> = ({ onInquireWhatsAp
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'featured' | 'price-asc' | 'price-desc' | 'craft-time'>('featured');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const lastSearchEvent = React.useRef('');
+  const lastCategoryEvent = React.useRef('todos');
+
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (query.length >= 2 && query !== lastSearchEvent.current) {
+      lastSearchEvent.current = query;
+      track({ event_id: crypto.randomUUID(), event_type: 'product_searched', metadata: { query_length: Math.min(query.length, 100) } });
+    }
+  }, [searchQuery]);
+
+  useEffect(() => {
+    if (selectedCategory !== lastCategoryEvent.current) {
+      lastCategoryEvent.current = selectedCategory;
+      track({ event_id: crypto.randomUUID(), event_type: 'product_filtered', metadata: { category: selectedCategory } });
+    }
+  }, [selectedCategory]);
 
   const fetchCatalogProducts = async () => {
     try {
@@ -186,7 +204,7 @@ export const CatalogSection: React.FC<CatalogSectionProps> = ({ onInquireWhatsAp
             <ProductCard
               key={product.id}
               product={product}
-              onOpenDetail={(prod) => setSelectedProduct(prod)}
+              onOpenDetail={(prod) => { track({ event_id: crypto.randomUUID(), event_type: 'product_viewed', product_id: prod.id, metadata: { category: prod.category } }); setSelectedProduct(prod); }}
               onInquireWhatsApp={onInquireWhatsApp}
             />
           ))}

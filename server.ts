@@ -17,6 +17,7 @@ import {
   isTursoConfigured,
   testTursoConnection,
   exportDatabaseDump,
+  insertAnalyticsEvent,
 } from './server/db.js';
 import { generateOrderPdf, OrderPdfData } from './server/pdfReceipt.js';
 
@@ -92,6 +93,7 @@ async function startServer() {
 
   app.use(cookieParser());
   app.use('/uploads', express.static(path.resolve(process.cwd(), 'public', 'uploads')));
+  app.use('/api/analytics/events', express.json({ limit: '32kb' }));
   app.use(express.json({ limit: '10mb' }));
 
   // Rate Limiting: relaxed in development / testing to prevent proxy-level lockout
@@ -121,13 +123,52 @@ async function startServer() {
     message: { error: 'Límite de validación de cupones alcanzado. Intenta más tarde.' },
   });
 
+  const analyticsLimiter = rateLimit({ windowMs: 60 * 1000, max: isDev ? 120 : 60, standardHeaders: true, legacyHeaders: false });
+
   app.use('/api', apiLimiter);
   app.use('/api/auth/login', authLimiter);
   app.use('/api/auth/register', authLimiter);
   app.use('/api/coupons/validate', couponLimiter);
+  app.use('/api/analytics/events', analyticsLimiter);
 
   // Initialize SQLite database
   initDatabase();
+
+  app.post('/api/analytics/events', (req, res) => {
+    try {
+      const events = req.body?.events;
+      if (!Array.isArray(events) || events.length < 1 || events.length > 20) return res.status(400).json({ error: 'Se requiere un lote de 1 a 20 eventos.' });
+      const allowed = new Set(['page_viewed','product_viewed','product_searched','product_filtered','cart_item_added','cart_item_removed','checkout_started']);
+      const forbiddenKey = /password|token|email|phone|address|name|notes|customer|authorization/i;
+      const authUser = getAuthUser(req);
+      const allowedProperties: Record<string, string[]> = {
+        page_viewed: ['page'], product_viewed: ['category'], product_searched: ['query_length'],
+        product_filtered: ['category'], cart_item_added: ['quantity'], cart_item_removed: ['quantity'], checkout_started: ['item_count'],
+      };
+      let accepted = 0;
+      const validated: any[] = [];
+      for (const event of events) {
+        if (!event || typeof event !== 'object' || !allowed.has(event.event_type)) return res.status(400).json({ error: 'Evento no permitido.' });
+        if (Object.keys(event).some((key) => !['event_id','event_type','timestamp','schema_version','session_id','anonymous_id','product_id','metadata'].includes(key))) return res.status(400).json({ error: 'Propiedades de evento no permitidas.' });
+        if (typeof event.event_id !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(event.event_id)) return res.status(400).json({ error: 'Identificador de evento inválido.' });
+        if (typeof event.session_id !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(event.session_id)) return res.status(400).json({ error: 'Sesión analítica inválida.' });
+        if (event.anonymous_id !== undefined && (typeof event.anonymous_id !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(event.anonymous_id))) return res.status(400).json({ error: 'Identificador anónimo inválido.' });
+        const properties = event.metadata ?? {};
+        if (!properties || typeof properties !== 'object' || Array.isArray(properties) || JSON.stringify(properties).length > 2048) return res.status(400).json({ error: 'Propiedades inválidas o demasiado grandes.' });
+        if (Object.keys(properties).some((key) => forbiddenKey.test(key) || !allowedProperties[event.event_type].includes(key))) return res.status(400).json({ error: 'Propiedades no permitidas.' });
+        const occurredAt = event.timestamp === undefined ? new Date().toISOString() : event.timestamp;
+        if (typeof occurredAt !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?Z$/.test(occurredAt) || Number.isNaN(Date.parse(occurredAt))) return res.status(400).json({ error: 'Fecha UTC inválida.' });
+        if (event.product_id !== undefined && (typeof event.product_id !== 'string' || event.product_id.length > 80 || !db.prepare('SELECT id FROM products WHERE id = ?').get(event.product_id))) return res.status(400).json({ error: 'Producto inexistente.' });
+        if (event.schema_version !== undefined && event.schema_version !== '1.0.0') return res.status(400).json({ error: 'Versión de esquema no soportada.' });
+        validated.push({ id: event.event_id, event_name: event.event_type, event_version: '1.0.0', anonymous_id: event.anonymous_id,
+          session_id: event.session_id, user_id: authUser?.id || null, source: 'frontend', entity_type: event.product_id ? 'product' : null,
+          entity_id: event.product_id, properties, occurred_at: occurredAt, is_simulated: true });
+      }
+      const insertBatch = db.transaction(() => { for (const item of validated) accepted += Number(insertAnalyticsEvent(item)); });
+      insertBatch();
+      return res.status(202).json({ accepted, duplicates: events.length - accepted });
+    } catch { return res.status(503).json({ error: 'Telemetría temporalmente no disponible.' }); }
+  });
 
   // ----------------------------------------------------
   // AUTHENTICATION ENDPOINTS
@@ -752,6 +793,7 @@ async function startServer() {
       // Check if request comes from an authenticated user
       const authUser = getAuthUser(req);
       const userId = authUser ? authUser.id : null;
+      const analyticalSessionId = typeof req.body?.analyticsSessionId === 'string' && /^[a-zA-Z0-9-]{16,80}$/.test(req.body.analyticsSessionId) ? req.body.analyticsSessionId : null;
 
       // 1. Recalcular subtotal en servidor y verificar inventario de forma autoritativa
       let calculatedSubtotal = 0;
@@ -946,6 +988,13 @@ async function startServer() {
             item.pImg
           );
         }
+
+        insertAnalyticsEvent({ id: `evt-order-${orderId}`, event_name: 'order_placed', session_id: analyticalSessionId || `order-${orderId}`,
+          user_id: userId || null, source: 'backend', entity_type: 'order', entity_id: orderId,
+          properties: { subtotal: calculatedSubtotal, discount: serverDiscount, shipping_cost: validShippingCost, total: calculatedTotal, is_simulated: true }, is_simulated: true });
+        if (appliedCouponCode) insertAnalyticsEvent({ id: `evt-coupon-${orderId}`, event_name: 'coupon_redeemed', session_id: analyticalSessionId || `order-${orderId}`,
+          user_id: userId || null, source: 'backend', entity_type: 'coupon', entity_id: appliedCouponCode,
+          properties: { discount: serverDiscount, order_id: orderId }, is_simulated: true });
       });
 
       insertOrder();
@@ -1429,13 +1478,16 @@ async function startServer() {
   // GET /api/system/export-dump - Exporta dump JSON de datos para migración segura hacia Turso
   app.get('/api/system/export-dump', (req, res) => {
     const authUser = getAuthUser(req);
-    // Permitir solo en modo desarrollo o a usuarios administradores
-    if (process.env.NODE_ENV === 'production' && (!authUser || authUser.role !== 'admin')) {
+    if (!authUser || authUser.role !== 'admin') {
       return res.status(403).json({ error: 'Acceso restringido a administradores para exportación de datos.' });
     }
 
     try {
       const dump = exportDatabaseDump();
+      delete (dump.tables as any).sessions;
+      delete (dump.tables as any).analytics_events;
+      for (const user of (dump.tables as any).users || []) { delete user.password_hash; delete user.google_sub; }
+      for (const order of (dump.tables as any).orders || []) delete order.access_token;
       res.setHeader('Content-Type', 'application/json');
       res.setHeader('Content-Disposition', `attachment; filename=amigurumis_mariai_dump_${Date.now()}.json`);
       return res.json(dump);
@@ -1556,14 +1608,14 @@ async function startServer() {
   });
 
   // Máquina de estados oficial para transiciones de pedidos (Fase 2F.2)
-  const VALID_STATUSES = ['pedido_recibido', 'en_preparacion', 'enviado', 'entregado'] as const;
+  const VALID_STATUSES = ['pedido_recibido', 'en_preparacion', 'enviado', 'entregado', 'cancelado'] as const;
   type OrderStatusType = typeof VALID_STATUSES[number];
 
   const VALID_TRANSITIONS: Record<OrderStatusType, OrderStatusType[]> = {
-    pedido_recibido: ['en_preparacion'],
-    en_preparacion: ['enviado'],
-    enviado: ['entregado'],
-    entregado: [], // Estado terminal en esta fase
+    pedido_recibido: ['en_preparacion', 'cancelado'],
+    en_preparacion: ['enviado', 'cancelado'],
+    enviado: ['entregado', 'cancelado'],
+    entregado: [], cancelado: [], // Estados terminales
   };
 
   // GET /api/admin/orders - Listado parametrizado con búsqueda, rango de fechas, estado y paginación
@@ -1704,7 +1756,12 @@ async function startServer() {
         );
       });
 
-      updateOrderAndAudit();
+      const saveTransition = db.transaction(() => {
+        updateOrderAndAudit();
+        if (cleanNewStatus === 'cancelado') insertAnalyticsEvent({ id: `evt-cancel-${order.id}-${historyId}`, event_name: 'order_cancelled', session_id: `order-${order.id}`,
+          user_id: order.user_id || null, source: 'backend', entity_type: 'order', entity_id: order.id, properties: { status: 'cancelado', is_simulated: true } });
+      });
+      saveTransition();
 
       console.log(`[AUDIT] Pedido ${order.order_number}: estado modificado de "${currentStatus}" a "${cleanNewStatus}" por admin ${adminUser.email}`);
 

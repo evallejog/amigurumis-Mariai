@@ -5,12 +5,13 @@ import fs from 'fs';
 import crypto from 'crypto';
 
 // Ensure data directory exists
-const dataDir = path.resolve(process.cwd(), 'data');
+const configuredDbPath = process.env.DATABASE_PATH ? path.resolve(process.env.DATABASE_PATH) : null;
+const dataDir = configuredDbPath ? path.dirname(configuredDbPath) : path.resolve(process.cwd(), 'data');
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
 
-const dbPath = path.join(dataDir, 'amigurumis_mariai.db');
+const dbPath = configuredDbPath || path.join(dataDir, 'amigurumis_mariai.db');
 const db = new Database(dbPath);
 
 // Enable WAL mode for high concurrency & performance
@@ -149,15 +150,29 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
     CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
     CREATE INDEX IF NOT EXISTS idx_products_status ON products(status);
+
+    CREATE TABLE IF NOT EXISTS analytics_events (
+      id TEXT PRIMARY KEY,
+      event_name TEXT NOT NULL,
+      event_version TEXT NOT NULL DEFAULT '1.0.0',
+      anonymous_id TEXT,
+      session_id TEXT NOT NULL,
+      user_id TEXT,
+      source TEXT NOT NULL CHECK (source IN ('frontend', 'backend', 'game')),
+      entity_type TEXT,
+      entity_id TEXT,
+      properties TEXT NOT NULL DEFAULT '{}',
+      occurred_at TEXT NOT NULL,
+      received_at TEXT NOT NULL,
+      is_simulated INTEGER NOT NULL DEFAULT 1 CHECK (is_simulated IN (0, 1)),
+      UNIQUE(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_analytics_events_name_date ON analytics_events(event_name, occurred_at);
+    CREATE INDEX IF NOT EXISTS idx_analytics_events_date ON analytics_events(occurred_at);
+    CREATE INDEX IF NOT EXISTS idx_analytics_events_session ON analytics_events(session_id);
   `);
 
-  // Ensure test-sess-1 from previous verification session is recognized
-  try {
-    db.prepare(`
-      INSERT OR IGNORE INTO btl_sessions (session_id, user_id, level, status, created_at)
-      VALUES ('test-sess-1', NULL, 1, 'completed', ?)
-    `).run(new Date().toISOString());
-  } catch {}
+  // Legacy/demo rows are never generated during normal startup.
 
   // Migrate users table to add profile contact/address fields and google_sub if missing
   try {
@@ -244,7 +259,9 @@ export function initDatabase() {
     `).run();
   } catch {}
 
+  // Demo coupon fixtures are opt-in; normal startup must not add commercial rows.
   // Seed default official BTL game coupons
+  if (process.env.SEED_DEMO_DATA === 'true') {
   const seedCoupons = [
     { code: 'POMPON5', percent: 5, level: 1, desc: '5% de Descuento BTL - Bosque de los Ovillos' },
     { code: 'POMPON10', percent: 10, level: 2, desc: '10% de Descuento BTL - Taller Encantado' },
@@ -260,7 +277,10 @@ export function initDatabase() {
   for (const c of seedCoupons) {
     insertCouponStmt.run(c.code, c.percent, c.level, c.desc, nowIso);
   }
+  }
 
+  // Legacy demo user/order are no longer created during normal startup.
+  if (process.env.SEED_DEMO_DATA === 'true') {
   // Seed default demonstration customer if not exists
   const existingUser = db.prepare('SELECT id FROM users WHERE email = ?').get('maria@amigurumismariai.com');
   if (!existingUser) {
@@ -329,6 +349,8 @@ export function initDatabase() {
     );
   }
 
+  }
+
   // Aprovisionamiento seguro e idempotente de la cuenta administrativa principal en desarrollo si ADMIN_PASSWORD está configurada
   if (process.env.ADMIN_PASSWORD && process.env.ADMIN_PASSWORD.trim().length >= 6) {
     const res = provisionMainAdmin();
@@ -345,6 +367,8 @@ export function initDatabase() {
     } catch {}
   }
 
+  // Catalog demo fixtures are also opt-in; existing catalog data is preserved.
+  if (process.env.SEED_DEMO_DATA === 'true') {
   // Seed default handcrafted amigurumis catalog if empty
   try {
     const countProducts = (db.prepare('SELECT count(*) as count FROM products').get() as any)?.count || 0;
@@ -611,7 +635,27 @@ export function initDatabase() {
     console.error('Error seeding initial products in SQLite:', err);
   }
 
+  }
   console.log('SQLite database initialized successfully at:', dbPath);
+}
+
+export type StoredAnalyticsEvent = {
+  id: string; event_name: string; event_version?: string; anonymous_id?: string | null;
+  session_id: string; user_id?: string | null; source: 'frontend' | 'backend' | 'game';
+  entity_type?: string | null; entity_id?: string | null; properties?: Record<string, unknown>;
+  occurred_at?: string; is_simulated?: boolean;
+};
+
+export function insertAnalyticsEvent(event: StoredAnalyticsEvent): boolean {
+  const receivedAt = new Date().toISOString();
+  const result = db.prepare(`INSERT OR IGNORE INTO analytics_events
+    (id,event_name,event_version,anonymous_id,session_id,user_id,source,entity_type,entity_id,properties,occurred_at,received_at,is_simulated)
+    VALUES (@id,@event_name,@event_version,@anonymous_id,@session_id,@user_id,@source,@entity_type,@entity_id,@properties,@occurred_at,@received_at,@is_simulated)`)
+    .run({ ...event, event_version: event.event_version || '1.0.0', anonymous_id: event.anonymous_id || null,
+      user_id: event.user_id || null, entity_type: event.entity_type || null, entity_id: event.entity_id || null,
+      properties: JSON.stringify(event.properties || {}), occurred_at: event.occurred_at || receivedAt,
+      received_at: receivedAt, is_simulated: event.is_simulated === false ? 0 : 1 });
+  return result.changes > 0;
 }
 
 // Password utilities using Node's native crypto

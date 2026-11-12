@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useCart } from '../../context/CartContext';
 import { useAuth } from '../../context/AuthContext';
+import { getAnalyticsSessionId, track } from '../../analytics/client';
 import { CustomerInfo, ShippingMethod, PaymentMethod, OrderDetails } from '../../types';
 import {
   X,
@@ -249,6 +250,7 @@ export const CheckoutModal: React.FC = () => {
       subtotal,
       shippingCost: currentShippingCost,
       total: finalCalculatedTotal,
+      analyticsSessionId: getAnalyticsSessionId(),
     };
 
     try {
@@ -278,6 +280,10 @@ export const CheckoutModal: React.FC = () => {
       setIsProcessing(false);
     }
   };
+
+  useEffect(() => {
+    if (isCheckoutOpen) track({ event_id: crypto.randomUUID(), event_type: 'checkout_started', metadata: { item_count: items.length } });
+  }, [isCheckoutOpen]);
 
   const handleNotifyWhatsApp = () => {
     if (!confirmedOrder) return;

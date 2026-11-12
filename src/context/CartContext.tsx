@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { Product, CartItem, OrderDetails } from '../types';
 import { useAuth } from './AuthContext';
+import { track } from '../analytics/client';
 
 interface CartContextType {
   items: CartItem[];
@@ -141,6 +142,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.warn(`[CART] Intento de agregar producto agotado: ${product.name}`);
       return;
     }
+    track({ event_id: crypto.randomUUID(), event_type: 'cart_item_added', product_id: product.id, metadata: { quantity: Math.max(1, Math.floor(quantity)) } });
 
     const availableStock = typeof product.stockUnits === 'number' ? product.stockUnits : 999;
     const requestedQty = Math.max(1, quantity);
@@ -174,6 +176,8 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const removeFromCart = (itemId: string) => {
+    const item = items.find((entry) => entry.id === itemId);
+    if (item) track({ event_id: crypto.randomUUID(), event_type: 'cart_item_removed', product_id: item.product.id, metadata: { quantity: item.quantity } });
     setItems((prev) => prev.filter((item) => item.id !== itemId));
   };
 

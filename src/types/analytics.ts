@@ -79,6 +79,18 @@ export interface AnalyticsEvent<TMetadata = Record<string, unknown>> {
   metadata: TMetadata;
 }
 
+/** Envelope accepted by POST /api/analytics/events. Identity and received time are server-owned. */
+export interface AnalyticsEventInput {
+  event_id: string;
+  event_type: AnalyticsEventType;
+  timestamp?: string;
+  schema_version?: '1.0.0';
+  session_id: string;
+  anonymous_id?: string;
+  product_id?: string;
+  metadata?: Record<string, unknown>;
+}
+
 export interface EventBatch {
   batch_id: string;
   sent_at: string;
