@@ -11,15 +11,14 @@ export const businessConfig: BusinessConfig = {
   aboutText: `En Amigurumis Mariai damos vida a piezas únicas hechas a mano con dedicación, ternura y precisión artesanal. 
 Cada muñeco es confeccionado punto a punto con hilos seleccionados de alta suavidad, buscando llevar calidez y alegría 
 a hogares en toda Colombia, ya sea para decoración, colección o como un regalo inolvidable.`,
-  craftPhilosophy: `Nuestras creaciones priorizan hilazas de algodón y lanas hipoalergénicas, ojos de seguridad fijados a presión 
-con arandela interna y relleno de vellón siliconado lavable que conserva su volumen. Al ser 100% manual, cada amigurumi 
-posee detalles únicos y una personalidad irrepetible.`,
+  craftPhilosophy: `Nuestras creaciones se trabajan a mano con materiales y acabados que pueden variar según el diseño.
+Consulta la ficha de cada pieza para conocer su composición y recomendaciones de cuidado.`,
   contact: {
     whatsappNumberPlaceholder: '+57 312 456 7890',
     whatsappDisplayText: 'Atención por WhatsApp (Colombia)',
     emailPlaceholder: 'contacto@amigurumismariai.com',
-    locationPlaceholder: 'Taller Artesanal — Bogotá D.C., Colombia (Envíos seguros a nivel nacional)',
-    workshopHours: 'Lunes a Sábado: 8:30 a 18:30 (Hora Colombia)',
+    locationPlaceholder: 'Ubicación del taller por confirmar',
+    workshopHours: 'Horario de atención por confirmar',
     instagramPlaceholder: '@amigurumis_mariai_co',
   },
 };

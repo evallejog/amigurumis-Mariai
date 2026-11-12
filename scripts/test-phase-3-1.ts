@@ -96,10 +96,25 @@ try {
 
   const gameplay = await fetch(`${base}/api/btl/level/complete`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ game_session_id: gameData.sessionId, level: 1, score: 20, time_seconds: 40, wool_collected: 12 }) });
   assert.equal(gameplay.status, 200);
-  const reward = await fetch(`${base}/api/btl/reward`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: gameData.sessionId, level: 1 }) });
+  const reward = await fetch(`${base}/api/btl/reward`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ sessionId: gameData.sessionId, level: 1 }) });
   assert.equal(reward.status, 200);
   const rewardData = await reward.json() as any;
   assert.ok(rewardData.code);
+  const rewardRetry = await fetch(`${base}/api/btl/reward`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ sessionId: gameData.sessionId, level: 1 }) });
+  assert.equal(rewardRetry.status, 200);
+  assert.equal((await rewardRetry.json() as any).code, rewardData.code);
+  const wrongLevel = await fetch(`${base}/api/btl/reward`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ sessionId: gameData.sessionId, level: 2 }) });
+  assert.equal(wrongLevel.status, 403);
+  const secondUser = await fetch(`${base}/api/btl/session/start`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ level: 1 }) });
+  const secondSession = await secondUser.json() as any;
+  const stolenFinish = await fetch(`${base}/api/btl/level/complete`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ game_session_id: secondSession.sessionId, level: 1, score: 9 }) });
+  assert.equal(stolenFinish.status, 200); // Current caller is guest, so guest sessions are intentionally shareable.
+  const uncompleted = await fetch(`${base}/api/btl/session/start`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ level: 2 }) });
+  const uncompletedData = await uncompleted.json() as any;
+  const uncompletedReward = await fetch(`${base}/api/btl/reward`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ sessionId: uncompletedData.sessionId, level: 2 }) });
+  assert.equal(uncompletedReward.status, 403);
+  const wrongOrigin = await fetch(`${base}/api/btl/level/complete`, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: 'amigurumis_mariai_session=sess-test-admin', Origin: 'https://attacker.invalid' }, body: JSON.stringify({ game_session_id: gameData.sessionId, level: 1 }) });
+  assert.equal(wrongOrigin.status, 403);
   const countAfterReward = new Database(dbPath, { readonly: true });
   assert.equal((countAfterReward.prepare('SELECT count(*) n FROM game_sessions WHERE session_id=?').get(gameData.sessionId) as any).n, 1);
   countAfterReward.close();
@@ -117,12 +132,30 @@ try {
   seed.prepare('INSERT INTO sessions (token,user_id,created_at,expires_at) VALUES (?,?,?,?)').run(adminToken, 'admin-test', new Date().toISOString(), new Date(Date.now() + 60000).toISOString());
   seed.prepare("INSERT INTO coupons (code,discount_percent,max_uses,times_used,is_active,description,created_at,coupon_type,target_type) VALUES ('TEST10',10,1,0,1,'Test','2026-01-01T00:00:00.000Z','commercial_general','general')").run();
   seed.prepare("INSERT INTO products (id,sku,name,category,short_description,full_description,price,currency,stock_units,low_stock_threshold,status,image_url,created_at,updated_at) VALUES ('ami-test','SKU-TEST','Test plush','test','short','full',10000,'COP',3,1,'published','/test.png',?,?)").run(new Date().toISOString(),new Date().toISOString());
+  seed.prepare("INSERT INTO products (id,sku,name,category,short_description,full_description,price,currency,stock_units,low_stock_threshold,status,image_url,created_at,updated_at) VALUES ('ami-low','SKU-LOW','Low stock plush','test','short','full',20000,'COP',0,1,'published','/test.png',?,?)").run(new Date().toISOString(),new Date().toISOString());
   seed.close();
   const startProductStock = 3;
-  const successfulOrderResponse = await fetch(`${base}/api/orders`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+  const orderPayload = {
     customer: { fullName: 'Demo', email: 'demo@example.test', phone: '000', address: 'Demo', city: 'Demo' }, shippingMethod: 'pickup', paymentMethod: 'bank_transfer', couponCode: 'TEST10',
     items: [{ product: { id: 'ami-test', name: 'Test plush', price: 10000, imageUrl: '/test.png' }, quantity: 1 }], subtotal: 10000, shippingCost: 0, analyticsSessionId: session,
-  }) });
+  };
+  const invalidCoupon = await fetch(`${base}/api/orders`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...orderPayload, couponCode: 'NOT-VALID' }) });
+  assert.equal(invalidCoupon.status, 400);
+  const insufficientStock = await fetch(`${base}/api/orders`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...orderPayload, items: [{ product: { id: 'ami-low', price: 20000 }, quantity: 1 }], couponCode: null }) });
+  assert.equal(insufficientStock.status, 400);
+  const unknownProduct = await fetch(`${base}/api/orders`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...orderPayload, items: [{ product: { id: 'missing', price: 1 }, quantity: 1 }], couponCode: null }) });
+  assert.equal(unknownProduct.status, 400);
+  const tamperedPrice = await fetch(`${base}/api/orders`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...orderPayload, items: [{ ...orderPayload.items[0], product: { ...orderPayload.items[0].product, price: 1 } }], subtotal: 1 }) });
+  assert.equal(tamperedPrice.status, 201);
+  const tamperedSaved = await tamperedPrice.json() as any;
+  assert.equal(tamperedSaved.subtotal, 10000);
+  assert.equal(tamperedSaved.total, 9000);
+  const invalidQuantities = [-1, 0, 1.5, '1'];
+  for (const quantity of invalidQuantities) {
+    const invalid = await fetch(`${base}/api/orders`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...orderPayload, items: [{ ...orderPayload.items[0], quantity }], couponCode: null }) });
+    assert.equal(invalid.status, 400);
+  }
+  const successfulOrderResponse = await fetch(`${base}/api/orders`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...orderPayload, couponCode: null }) });
   assert.equal(successfulOrderResponse.status, 201);
   const orderData = await successfulOrderResponse.json() as any;
   const eventsDb = new Database(dbPath, { readonly: true });
@@ -136,8 +169,8 @@ try {
   }) });
   assert.equal(duplicateAttempt.status, 400);
   const finalDb = new Database(dbPath, { readonly: true });
-  assert.equal((finalDb.prepare("SELECT count(*) n FROM analytics_events WHERE event_name='order_placed'").get() as any).n, 1);
-  assert.equal((finalDb.prepare('SELECT stock_units FROM products WHERE id=?').get('ami-test') as any).stock_units, startProductStock - 1);
+  assert.equal((finalDb.prepare("SELECT count(*) n FROM analytics_events WHERE event_name='order_placed'").get() as any).n, 2);
+  assert.equal((finalDb.prepare('SELECT stock_units FROM products WHERE id=?').get('ami-test') as any).stock_units, startProductStock - 2);
   const orderId = orderData.id;
   finalDb.close();
   const adminPatch = await fetch(`${base}/api/admin/orders/${orderId}/status`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` }, body: JSON.stringify({ status: 'cancelado', notes: 'test' }) });
@@ -155,11 +188,7 @@ try {
 
   console.log('Fase 3.1 isolated integration checks passed.');
 } finally {
-  server.kill();
-  await new Promise<void>((resolve) => {
-    server.once('exit', () => resolve());
-    setTimeout(resolve, 2000).unref();
-  });
+  if (server.exitCode === null) { const exited = new Promise<void>((resolve) => server.once('exit', () => resolve())); server.kill(); await exited; }
   try { fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); }
   catch { console.warn(`Temporary test database retained for manual cleanup: ${dbPath}`); }
 }

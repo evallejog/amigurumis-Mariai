@@ -20,7 +20,7 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
             <BrandLogo size="md" showTagline={true} />
             <p className="text-xs text-stone-500 max-w-sm leading-relaxed font-normal pt-1">
               Taller artesanal colombiano dedicado a la creación punto a punto de amigurumis y figuras
-              a crochet con materiales hipoalergénicos y experiencias interactivas.
+              a crochet y experiencias interactivas.
             </p>
           </div>
 
@@ -71,7 +71,7 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
               Compromiso de Calidad
             </h4>
             <ul className="space-y-2 text-xs text-stone-500">
-              <li>100% Algodón Peinado y Suave</li>
+              <li>Detalles de materiales en cada ficha</li>
               <li>Ojos con Traba de Seguridad</li>
               <li>Relleno Siliconado Hipoalergénico</li>
               <li>Envíos Nacionales en Colombia</li>

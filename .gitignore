@@ -16,3 +16,13 @@ coverage/
 
 # Archivos locales subidos por usuarios
 public/uploads/
+ml/.venv/
+ml/artifacts/*.json
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Artefactos generados de ML
+ml/artifacts/runs/

@@ -130,7 +130,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                 <div className="flex items-center gap-2 text-stone-700">
                   <Clock className="w-4 h-4 text-amber-700 shrink-0" />
                   <span>
-                    Tiempo de tejido: <strong>{product.approxCraftTimeHours || 8} horas</strong> de labor punto a punto
+                    Tiempo de tejido: <strong>{product.approxCraftTimeHours ? `${product.approxCraftTimeHours} horas estimadas` : 'No informado'}</strong>
                   </span>
                 </div>
 
@@ -217,7 +217,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
               <div className="flex items-center justify-center gap-1.5 text-[11px] text-stone-400 pt-1">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Garantía artesanal y confección en hilos hipoalergénicos</span>
+                <span>Consulta los materiales y cuidados específicos de esta pieza</span>
               </div>
             </div>
           </div>

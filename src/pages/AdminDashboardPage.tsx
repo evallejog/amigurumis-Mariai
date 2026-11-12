@@ -2,6 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { BrandLogo } from '../components/common/BrandLogo';
+import { AnalyticsDashboard } from '../components/admin/AnalyticsDashboard';
+import { MachineLearningDashboard } from '../components/admin/MachineLearningDashboard';
+import { ContactMessagesDashboard } from '../components/admin/ContactMessagesDashboard';
 import { Product } from '../types';
 import {
   LayoutDashboard,
@@ -49,10 +52,11 @@ import {
   EyeOff,
   Edit3,
   SlidersHorizontal,
-  Ruler
+  Ruler,
+  Mail
 } from 'lucide-react';
 
-type AdminTab = 'overview' | 'products' | 'orders' | 'customers' | 'coupons' | 'btl' | 'analytics' | 'ml';
+type AdminTab = 'overview' | 'products' | 'orders' | 'customers' | 'coupons' | 'btl' | 'messages' | 'analytics' | 'ml';
 
 interface OverviewData {
   totalOrders: number;
@@ -160,7 +164,7 @@ const ORDER_STATUS_LABELS: Record<string, string> = {
 
 export const AdminDashboardPage: React.FC = () => {
   const navigate = useNavigate();
-  const { user, token, isAuthenticated, isLoading: authLoading, logout, openAuthModal } = useAuth();
+  const { user, isAuthenticated, isLoading: authLoading, logout, openAuthModal } = useAuth();
 
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [loadingData, setLoadingData] = useState<boolean>(false);
@@ -306,15 +310,13 @@ export const AdminDashboardPage: React.FC = () => {
   const [quickActionId, setQuickActionId] = useState<string | null>(null);
 
   // Fetch functions with Bearer token authentication
-  const getAuthHeaders = (): Record<string, string> => {
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  };
+  const getAuthHeaders = (): RequestInit => ({ credentials: 'same-origin' });
 
   const loadOverview = async () => {
     try {
       setLoadingData(true);
       setErrorMessage(null);
-      const res = await fetch('/api/admin/overview', { headers: getAuthHeaders() });
+      const res = await fetch('/api/admin/overview', getAuthHeaders());
       if (!res.ok) {
         if (res.status === 403) throw new Error('No tienes permisos de administrador.');
         throw new Error('Error al obtener datos de resumen.');
@@ -345,7 +347,7 @@ export const AdminDashboardPage: React.FC = () => {
         ...(sort ? { sort } : {}),
         limit: '100',
       });
-      const res = await fetch(`/api/admin/products?${query.toString()}`, { headers: getAuthHeaders() });
+      const res = await fetch(`/api/admin/products?${query.toString()}`, getAuthHeaders());
       if (!res.ok) throw new Error('Error al consultar productos del catálogo.');
       const data = await res.json();
       setProducts(data.products || []);
@@ -472,9 +474,9 @@ export const AdminDashboardPage: React.FC = () => {
 
       const res = await fetch(url, {
         method,
+        credentials: 'same-origin',
         headers: {
           'Content-Type': 'application/json',
-          ...getAuthHeaders(),
         },
         body: JSON.stringify(payload),
       });
@@ -504,9 +506,9 @@ export const AdminDashboardPage: React.FC = () => {
       setQuickActionId(prodId);
       const res = await fetch(`/api/admin/products/${prodId}`, {
         method: 'PATCH',
+        credentials: 'same-origin',
         headers: {
           'Content-Type': 'application/json',
-          ...getAuthHeaders(),
         },
         body: JSON.stringify({ stockUnits: newStock }),
       });
@@ -542,9 +544,9 @@ export const AdminDashboardPage: React.FC = () => {
       setQuickActionId(prodId);
       const res = await fetch(`/api/admin/products/${prodId}/status`, {
         method: 'PATCH',
+        credentials: 'same-origin',
         headers: {
           'Content-Type': 'application/json',
-          ...getAuthHeaders(),
         },
         body: JSON.stringify({ status: nextStatus }),
       });
@@ -590,9 +592,9 @@ export const AdminDashboardPage: React.FC = () => {
           const base64 = reader.result as string;
           const res = await fetch('/api/admin/products/upload-image', {
             method: 'POST',
+            credentials: 'same-origin',
             headers: {
               'Content-Type': 'application/json',
-              ...getAuthHeaders(),
             },
             body: JSON.stringify({
               fileData: base64,
@@ -635,7 +637,7 @@ export const AdminDashboardPage: React.FC = () => {
         ...(startDate ? { startDate } : {}),
         ...(endDate ? { endDate } : {}),
       });
-      const res = await fetch(`/api/admin/orders?${query.toString()}`, { headers: getAuthHeaders() });
+      const res = await fetch(`/api/admin/orders?${query.toString()}`, getAuthHeaders());
       if (!res.ok) throw new Error('Error al consultar pedidos.');
       const data = await res.json();
       setOrders(data.orders || []);
@@ -664,7 +666,7 @@ export const AdminDashboardPage: React.FC = () => {
         ...(startDate ? { startDate } : {}),
         ...(endDate ? { endDate } : {}),
       });
-      const res = await fetch(`/api/admin/customers?${query.toString()}`, { headers: getAuthHeaders() });
+      const res = await fetch(`/api/admin/customers?${query.toString()}`, getAuthHeaders());
       if (!res.ok) throw new Error('Error al consultar clientes.');
       const data = await res.json();
       setCustomers(data.customers || []);
@@ -693,7 +695,7 @@ export const AdminDashboardPage: React.FC = () => {
         ...(status !== 'all' ? { status } : {}),
         ...(search.trim() ? { search: search.trim() } : {}),
       });
-      const res = await fetch(`/api/admin/coupons?${query.toString()}`, { headers: getAuthHeaders() });
+      const res = await fetch(`/api/admin/coupons?${query.toString()}`, getAuthHeaders());
       if (!res.ok) throw new Error('Error al consultar cupones.');
       const data = await res.json();
       setCoupons(data.coupons || []);
@@ -715,7 +717,7 @@ export const AdminDashboardPage: React.FC = () => {
     setIsCouponModalOpen(true);
     if (customerOptions.length === 0) {
       try {
-        const res = await fetch('/api/admin/customers?limit=50', { headers: getAuthHeaders() });
+        const res = await fetch('/api/admin/customers?limit=50', getAuthHeaders());
         if (res.ok) {
           const data = await res.json();
           setCustomerOptions((data.customers || []).map((c: any) => ({ id: c.id, name: c.name, email: c.email })));
@@ -727,8 +729,8 @@ export const AdminDashboardPage: React.FC = () => {
   const loadBtl = async () => {
     try {
       setLoadingData(true);
-      const res = await fetch('/api/admin/btl/overview', { headers: getAuthHeaders() });
-      if (!res.ok) throw new Error('Error al consultar telemetría BTL.');
+      const res = await fetch('/api/admin/btl/overview', getAuthHeaders());
+      if (!res.ok) throw new Error('Error al consultar estadísticas del videojuego.');
       const data = await res.json();
       setBtlSummary(data.summary);
       setBtlLevelStats(data.levelStats || []);
@@ -756,9 +758,9 @@ export const AdminDashboardPage: React.FC = () => {
       setStatusActionError(null);
       const res = await fetch(`/api/admin/orders/${statusModalOrder.id}/status`, {
         method: 'PATCH',
+        credentials: 'same-origin',
         headers: {
           'Content-Type': 'application/json',
-          ...getAuthHeaders(),
         },
         body: JSON.stringify({
           status: statusModalNextStatus,
@@ -791,7 +793,7 @@ export const AdminDashboardPage: React.FC = () => {
     setIsLoadingHistory(true);
     try {
       const res = await fetch(`/api/admin/orders/${order.id}/history`, {
-        headers: getAuthHeaders(),
+        credentials: 'same-origin',
       });
       const data = await res.json();
       if (!res.ok) {
@@ -812,9 +814,9 @@ export const AdminDashboardPage: React.FC = () => {
       const newStatus = coupon.is_active ? false : true;
       const res = await fetch(`/api/admin/coupons/${coupon.code}`, {
         method: 'PATCH',
+        credentials: 'same-origin',
         headers: {
           'Content-Type': 'application/json',
-          ...getAuthHeaders(),
         },
         body: JSON.stringify({
           isActive: newStatus,
@@ -846,9 +848,9 @@ export const AdminDashboardPage: React.FC = () => {
 
       const res = await fetch('/api/admin/coupons', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: {
           'Content-Type': 'application/json',
-          ...getAuthHeaders(),
         },
         body: JSON.stringify({
           code: couponForm.code.trim().toUpperCase(),
@@ -1007,12 +1009,13 @@ export const AdminDashboardPage: React.FC = () => {
     { id: 'customers', label: 'Clientes Registrados', icon: Users, badge: overview?.totalCustomers?.toString() },
     { id: 'coupons', label: 'Cupones & Recompensas', icon: Tag, badge: overview?.totalCoupons?.toString() },
     { id: 'btl', label: 'Videojuego Pompón', icon: Gamepad2 },
-    { id: 'analytics', label: 'Data Analytics', icon: BarChart3, badge: 'Fase 3' },
-    { id: 'ml', label: 'Machine Learning', icon: Cpu, badge: 'Fase 4' },
+    { id: 'messages', label: 'Mensajes y consultas', icon: Mail },
+    { id: 'analytics', label: 'Inteligencia Comercial', icon: BarChart3 },
+    { id: 'ml', label: 'Análisis Predictivo', icon: Cpu },
   ];
 
   return (
-    <div className="min-h-screen bg-[#FAF7F2] text-[#2E2823] font-sans flex flex-col lg:flex-row">
+    <div className="admin-panel min-h-screen bg-[#FAF7F2] text-[#2E2823] font-sans flex flex-col lg:flex-row">
       {/* MOBILE TOP BAR (lg:hidden) */}
       <header className="lg:hidden sticky top-0 z-30 bg-white/95 border-b border-stone-200/80 px-4 py-3 flex items-center justify-between backdrop-blur-md shadow-xs">
         <div className="flex items-center gap-3">
@@ -1115,19 +1118,20 @@ export const AdminDashboardPage: React.FC = () => {
                       setActiveTab(item.id);
                       setIsMobileNavOpen(false);
                     }}
-                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold font-sans transition-all cursor-pointer ${
+                    aria-current={isActive ? 'page' : undefined}
+                    className={`w-full flex items-center gap-3 min-h-11 px-3.5 py-2.5 rounded-xl text-[13px] font-bold font-sans text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700 cursor-pointer ${
                       isActive
                         ? 'bg-stone-900 text-white shadow-xs'
                         : 'text-stone-600 hover:text-stone-950 hover:bg-stone-100/70'
                     }`}
                   >
-                    <div className="flex items-center gap-2.5">
-                      <Icon className={`w-4 h-4 ${isActive ? 'text-amber-400' : 'text-stone-500'}`} />
-                      <span>{item.label}</span>
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
+                      <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-amber-400' : 'text-stone-500'}`} />
+                      <span className="leading-snug">{item.label}</span>
                     </div>
                     {item.badge && (
                       <span
-                        className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                        className={`shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
                           isActive
                             ? 'bg-white/20 text-white'
                             : 'bg-stone-200 text-stone-700'
@@ -1180,7 +1184,7 @@ export const AdminDashboardPage: React.FC = () => {
       </div>
 
       {/* SIDEBAR NAVIGATION (DESKTOP) */}
-      <aside className="hidden lg:flex lg:w-64 bg-white/85 border-r border-stone-200/80 p-6 flex-col justify-between shrink-0 backdrop-blur-2xl sticky top-0 h-screen overflow-y-auto">
+      <aside className="hidden lg:flex lg:w-72 xl:w-80 bg-white/85 border-r border-stone-200/80 px-4 py-6 xl:px-5 flex-col justify-between shrink-0 backdrop-blur-2xl sticky top-0 h-screen overflow-y-auto">
         <div>
           {/* Brand Header */}
           <div className="mb-6 pb-4 border-b border-stone-200/60">
@@ -1191,7 +1195,7 @@ export const AdminDashboardPage: React.FC = () => {
                 Panel Administrativo
               </span>
             </div>
-            <p className="text-[10px] text-stone-500 mt-0.5">Amigurumis Mariai v2.4 (Fase 2F.1)</p>
+            <p className="text-[10px] text-stone-500 mt-0.5">Amigurumis Mariai v2.4</p>
           </div>
 
           {/* Navigation Links */}
@@ -1203,19 +1207,20 @@ export const AdminDashboardPage: React.FC = () => {
                 <button
                   key={item.id}
                   onClick={() => setActiveTab(item.id)}
-                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold font-sans transition-all cursor-pointer ${
+                  aria-current={isActive ? 'page' : undefined}
+                  className={`w-full flex items-center gap-3 min-h-11 px-3 py-2.5 rounded-xl text-[13px] font-bold font-sans text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700 cursor-pointer ${
                     isActive
                       ? 'bg-stone-900 text-white shadow-xs'
                       : 'text-stone-600 hover:text-stone-950 hover:bg-stone-100/70'
                   }`}
                 >
-                  <div className="flex items-center gap-2.5">
-                    <Icon className={`w-4 h-4 ${isActive ? 'text-amber-400' : 'text-stone-500'}`} />
-                    <span>{item.label}</span>
+                  <div className="flex min-w-0 flex-1 items-center gap-3">
+                    <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-amber-400' : 'text-stone-500'}`} />
+                    <span className="leading-snug">{item.label}</span>
                   </div>
                   {item.badge && (
                     <span
-                      className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                      className={`shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
                         isActive
                           ? 'bg-white/20 text-white'
                           : 'bg-stone-200 text-stone-700'
@@ -1272,11 +1277,12 @@ export const AdminDashboardPage: React.FC = () => {
               {activeTab === 'customers' && 'Directorio de Clientes'}
               {activeTab === 'coupons' && 'Cupones & Recompensas'}
               {activeTab === 'btl' && 'Telemetría del Videojuego Pompón'}
-              {activeTab === 'analytics' && 'Módulo de Data Analytics (Fase 3)'}
-              {activeTab === 'ml' && 'Módulo de Machine Learning (Fase 4)'}
+              {activeTab === 'messages' && 'Mensajes y consultas'}
+              {activeTab === 'analytics' && 'Inteligencia Comercial'}
+              {activeTab === 'ml' && 'Análisis Predictivo'}
             </h1>
             <p className="text-xs text-stone-500 mt-0.5">
-              Datos reales sincronizados en tiempo real con SQLite (Modo Demostración Académica).
+              {activeTab === 'ml' ? 'Resultados de experimentos previamente generados. La fuente, fecha y estado corresponden a la ejecución cargada.' : activeTab === 'analytics' ? 'Indicadores consultados desde la base comercial mediante los servicios analíticos.' : 'Información operativa del panel administrativo.'}
             </p>
           </div>
 
@@ -2100,7 +2106,7 @@ export const AdminDashboardPage: React.FC = () => {
                                   {ord.coupon_code}
                                 </span>
                               ) : (
-                                <span className="text-stone-400 text-[10px]">—</span>
+                                <span className="text-stone-400 text-[10px]">No disponible</span>
                               )}
                             </td>
                             <td className="py-3 px-4 font-bold text-stone-900 whitespace-nowrap">{formatCOP(ord.total)}</td>
@@ -2675,76 +2681,24 @@ export const AdminDashboardPage: React.FC = () => {
         {/* TAB 6: DATA ANALYTICS (PREPARADO - FASE 3) */}
         {/* ------------------------------------------------------------- */}
         {activeTab === 'analytics' && (
-          <div className="space-y-6">
-            {/* Academic Notice Banner */}
-            <div className="p-5 rounded-3xl bg-blue-50/80 border border-blue-200 text-xs text-blue-900 flex items-start gap-3">
-              <Layers className="w-5 h-5 text-blue-700 shrink-0 mt-0.5" />
-              <div>
-                <div className="flex items-center gap-2">
-                  <h4 className="font-bold text-blue-950">Módulo de Data Analytics (Estructura Lista para Fase 3)</h4>
-                  <span className="px-2 py-0.5 rounded-full bg-blue-200 text-blue-900 text-[10px] font-extrabold uppercase">
-                    Arquitectura Preparada
-                  </span>
-                </div>
-                <p className="text-[11px] text-blue-800 leading-relaxed mt-1">
-                  Los contratos tipados de telemetría y eventos ya están definidos en{' '}
-                  <code className="bg-blue-100 px-1 py-0.5 rounded font-mono text-[10px]">src/types/analytics.ts</code>.
-                  Esta sección visual presenta la arquitectura de tableros analíticos que se alimentará en la Fase 3
-                  sin alterar la base de datos transaccional actual.
-                </p>
-              </div>
-            </div>
-
-            {/* Conceptual Mockup Visual Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="p-6 rounded-3xl liquid-glass border border-white/80 shadow-xs bg-white/70 space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-bold text-stone-900">Evolución Temporal de Ventas</h4>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-stone-200 text-stone-700">
-                    Pipeline OLAP Pendiente
-                  </span>
-                </div>
-                <p className="text-xs text-stone-500 leading-relaxed">
-                  Agregación diaria y semanal de pedidos confirmados versus canje de recompensas de Pompón.
-                </p>
-                <div className="h-36 rounded-2xl bg-stone-100/80 border border-dashed border-stone-300 flex flex-col items-center justify-center p-4 text-center">
-                  <BarChart3 className="w-8 h-8 text-stone-400 mb-1" />
-                  <p className="text-xs font-bold text-stone-600">Visualización de Series Temporales</p>
-                  <p className="text-[10px] text-stone-400">Contratos: TimeSeriesPoint / CommercialKpisSummary</p>
-                </div>
-              </div>
-
-              <div className="p-6 rounded-3xl liquid-glass border border-white/80 shadow-xs bg-white/70 space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-bold text-stone-900">Embudo de Conversión Comercial</h4>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-stone-200 text-stone-700">
-                    Telemetría Lista
-                  </span>
-                </div>
-                <p className="text-xs text-stone-500 leading-relaxed">
-                  Trazabilidad: Catálogo &rarr; Bolsa de Compras &rarr; Checkout &rarr; Pedido Confirmado &rarr; Descarga PDF.
-                </p>
-                <div className="h-36 rounded-2xl bg-stone-100/80 border border-dashed border-stone-300 flex flex-col items-center justify-center p-4 text-center">
-                  <TrendingUp className="w-8 h-8 text-stone-400 mb-1" />
-                  <p className="text-xs font-bold text-stone-600">Embudo Multietapa</p>
-                  <p className="text-[10px] text-stone-400">Contratos: CommercialEventType en analytics.ts</p>
-                </div>
-              </div>
-            </div>
-          </div>
+          <AnalyticsDashboard />
         )}
+
+        {activeTab === 'messages' && <ContactMessagesDashboard />}
 
         {/* ------------------------------------------------------------- */}
         {/* TAB 7: MACHINE LEARNING (PREPARADO - FASE 4) */}
         {/* ------------------------------------------------------------- */}
         {activeTab === 'ml' && (
-          <div className="space-y-6">
+          <>
+          <MachineLearningDashboard />
+          {false && <div className="space-y-6">
             {/* Academic Notice Banner */}
             <div className="p-5 rounded-3xl bg-purple-50/80 border border-purple-200 text-xs text-purple-900 flex items-start gap-3">
               <Cpu className="w-5 h-5 text-purple-700 shrink-0 mt-0.5" />
               <div>
                 <div className="flex items-center gap-2">
-                  <h4 className="font-bold text-purple-950">Módulo de Machine Learning (Contratos Preparados para Fase 4)</h4>
+                  <h4 className="font-bold text-purple-950">Análisis Predictivo</h4>
                   <span className="px-2 py-0.5 rounded-full bg-purple-200 text-purple-900 text-[10px] font-extrabold uppercase">
                     Esquemas Sin Inferencia Ficticia
                   </span>
@@ -2797,7 +2751,8 @@ export const AdminDashboardPage: React.FC = () => {
                 </div>
               </div>
             </div>
-          </div>
+          </div>}
+          </>
         )}
         {/* ============================================================= */}
         {/* MODAL 1: ORDER STATUS TRANSITION CONFIRMATION */}
@@ -3294,9 +3249,9 @@ export const AdminDashboardPage: React.FC = () => {
                     <TrendingUp className="w-3.5 h-3.5 text-amber-700" />
                     <span>2. Valores Comerciales & Stock en Taller</span>
                   </h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-                    <div>
-                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+                    <div className="min-w-0">
+                      <label className="text-xs font-bold text-stone-700 flex items-end mb-1 sm:min-h-8">
                         Precio COP <span className="text-rose-600">*</span>
                       </label>
                       <input
@@ -3306,13 +3261,13 @@ export const AdminDashboardPage: React.FC = () => {
                         step={500}
                         value={productForm.price}
                         onChange={(e) => setProductForm({ ...productForm, price: Number(e.target.value) || 0 })}
-                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs font-bold text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                        className="w-full h-11 px-3 rounded-xl bg-white border border-stone-200 text-xs font-bold text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
                       />
                       <span className="text-[10px] text-stone-500 mt-0.5 block">{formatCOP(productForm.price)}</span>
                     </div>
 
-                    <div>
-                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                    <div className="min-w-0">
+                      <label className="text-xs font-bold text-stone-700 flex items-end mb-1 sm:min-h-8">
                         Inventario Físico (Unidades) <span className="text-rose-600">*</span>
                       </label>
                       <input
@@ -3321,12 +3276,12 @@ export const AdminDashboardPage: React.FC = () => {
                         min={0}
                         value={productForm.stockUnits}
                         onChange={(e) => setProductForm({ ...productForm, stockUnits: Number(e.target.value) || 0 })}
-                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs font-bold text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                        className="w-full h-11 px-3 rounded-xl bg-white border border-stone-200 text-xs font-bold text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
                       />
                     </div>
 
-                    <div>
-                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                    <div className="min-w-0">
+                      <label className="text-xs font-bold text-stone-700 flex items-end mb-1 sm:min-h-8">
                         Umbral Alerta Bajo Stock
                       </label>
                       <input
@@ -3334,18 +3289,18 @@ export const AdminDashboardPage: React.FC = () => {
                         min={1}
                         value={productForm.lowStockThreshold}
                         onChange={(e) => setProductForm({ ...productForm, lowStockThreshold: Number(e.target.value) || 2 })}
-                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                        className="w-full h-11 px-3 rounded-xl bg-white border border-stone-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
                       />
                     </div>
 
-                    <div>
-                      <label className="text-xs font-bold text-stone-700 block mb-1">
+                    <div className="min-w-0">
+                      <label className="text-xs font-bold text-stone-700 flex items-end mb-1 sm:min-h-8">
                         Estado de Publicación
                       </label>
                       <select
                         value={productForm.status}
                         onChange={(e) => setProductForm({ ...productForm, status: e.target.value as any })}
-                        className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs font-bold text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                        className="w-full h-11 px-3 rounded-xl bg-white border border-stone-200 text-xs font-bold text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
                       >
                         <option value="published">Publicado (Visible en tienda)</option>
                         <option value="hidden">Oculto (Borrador interno)</option>
@@ -3721,7 +3676,7 @@ export const AdminDashboardPage: React.FC = () => {
                 <div className="p-3 rounded-xl bg-stone-50 border border-stone-200/70">
                   <span className="text-[10px] uppercase font-bold text-stone-500 block mb-1">Tiempo de Tejido</span>
                   <p className="font-bold text-amber-900">
-                    {detailProduct.approxCraftTimeHours || 5} horas estimadas
+                    {detailProduct.approxCraftTimeHours ? `${detailProduct.approxCraftTimeHours} horas estimadas` : 'Tiempo no informado'}
                   </p>
                 </div>
 

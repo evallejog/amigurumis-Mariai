@@ -100,7 +100,7 @@ export const CatalogSection: React.FC<CatalogSectionProps> = ({ onInquireWhatsAp
   }, [products, selectedCategory, searchQuery, sortBy]);
 
   return (
-    <section id="catalogo" className="py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+    <section id="catalogo" className="pt-10 pb-20 sm:pt-14 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
       {/* Section Header */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
         <div>
@@ -113,8 +113,7 @@ export const CatalogSection: React.FC<CatalogSectionProps> = ({ onInquireWhatsAp
             Catálogo de Creaciones Artesanales
           </h2>
           <p className="mt-2 text-stone-600 text-sm sm:text-base max-w-2xl font-light">
-            Cada amigurumi es confeccionado individualmente punto por punto con hilo 100% algodón natural,
-            relleno hipoalergénico y ojos de máxima seguridad.
+            Explora piezas tejidas a mano y consulta en cada ficha los materiales, acabados y detalles disponibles.
           </p>
         </div>
 

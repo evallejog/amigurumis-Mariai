@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Phaser from 'phaser';
 import { useCart } from '../context/CartContext';
-import { useAuth } from '../context/AuthContext';
 import { LevelScene } from './scenes/LevelScene';
 import { LevelConfig, GameTelemetryPayload, GameState } from './types';
 import {
@@ -74,7 +73,6 @@ export const BtlGameSection: React.FC<BtlGameSectionProps> = ({
 }) => {
   const navigate = useNavigate();
   const { setIsCartOpen, setPendingCouponCode } = useCart();
-  const { token } = useAuth();
 
   const [selectedLevel, setSelectedLevel] = useState<1 | 2 | 3>(1);
   const [gameState, setGameState] = useState<GameState>('menu');
@@ -158,6 +156,7 @@ export const BtlGameSection: React.FC<BtlGameSectionProps> = ({
     try {
       fetch('/api/btl/session/start', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ level: levelNum }),
       })
@@ -223,17 +222,16 @@ export const BtlGameSection: React.FC<BtlGameSectionProps> = ({
             sessionStorage.setItem('amigurumis_mariai_btl_sess', sessId);
           }
 
-          // Solicitud de cupón aleatorio único (MARIAI-XXXXXX) al backend
+          // Registrar la finalización antes de solicitar la recompensa única.
           try {
-            const res = await fetch('/api/btl/reward', {
+            const completion = await fetch('/api/btl/level/complete', {
               method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                ...(token ? { Authorization: `Bearer ${token}` } : {}),
-              },
-              body: JSON.stringify({ level: data.level, sessionId: sessId }),
+              credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ game_session_id: sessId, level: data.level, score: data.score, time_seconds: data.timeElapsedSeconds, wool_collected: data.woolCollected }),
             });
-
+            if (!completion.ok) throw new Error('No se pudo registrar la finalización del nivel.');
+            const res = await fetch('/api/btl/reward', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: data.level, sessionId: sessId }) });
             if (res.ok) {
               const rewardData = await res.json();
               if (rewardData.success && rewardData.code) {
@@ -245,20 +243,6 @@ export const BtlGameSection: React.FC<BtlGameSectionProps> = ({
             console.warn('Error fetching BTL coupon reward:', err);
           }
 
-          // Reportar a endpoint de telemetría
-          try {
-            fetch('/api/btl/level/complete', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                game_session_id: sessId,
-                level: data.level,
-                score: data.score,
-                time_seconds: data.timeElapsedSeconds,
-                wool_collected: data.woolCollected,
-              }),
-            }).catch(() => {});
-          } catch {}
         },
         onGameOver: (data: GameTelemetryPayload) => {
           setGameOverModalData(data);

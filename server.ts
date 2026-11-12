@@ -69,6 +69,10 @@ function generateRandomCouponCode(): string {
   return `MARIAI-${result}`;
 }
 
+function sessionCookieOptions() {
+  return { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' as const, maxAge: 30 * 24 * 60 * 60 * 1000, path: '/' };
+}
+
 async function startServer() {
   const app = express();
   const portArgIdx = process.argv.indexOf('--port');
@@ -95,6 +99,19 @@ async function startServer() {
   app.use('/uploads', express.static(path.resolve(process.cwd(), 'public', 'uploads')));
   app.use('/api/analytics/events', express.json({ limit: '32kb' }));
   app.use(express.json({ limit: '10mb' }));
+
+  app.use('/api', (req, res, next) => {
+    const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+    const hasSessionCookie = Boolean(req.cookies?.amigurumis_mariai_session);
+    if (unsafe && hasSessionCookie) {
+      const origin = req.get('origin');
+      const host = req.get('host');
+      if (!origin || !host) return res.status(403).json({ error: 'Se requiere Origin para solicitudes con sesión.' });
+      try { if (new URL(origin).host !== host) return res.status(403).json({ error: 'Origen de solicitud no permitido.' }); }
+      catch { return res.status(403).json({ error: 'Origen de solicitud inválido.' }); }
+    }
+    next();
+  });
 
   // Rate Limiting: relaxed in development / testing to prevent proxy-level lockout
   const isDev = process.env.NODE_ENV !== 'production';
@@ -124,15 +141,37 @@ async function startServer() {
   });
 
   const analyticsLimiter = rateLimit({ windowMs: 60 * 1000, max: isDev ? 120 : 60, standardHeaders: true, legacyHeaders: false });
+  const contactLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: isDev ? 20 : 6, standardHeaders: true, legacyHeaders: false, message: { error: 'Demasiados mensajes enviados. Intenta de nuevo más tarde.' } });
 
   app.use('/api', apiLimiter);
   app.use('/api/auth/login', authLimiter);
   app.use('/api/auth/register', authLimiter);
   app.use('/api/coupons/validate', couponLimiter);
   app.use('/api/analytics/events', analyticsLimiter);
+  app.use('/api/contact/messages', contactLimiter);
 
   // Initialize SQLite database
   initDatabase();
+
+  const contactText = (value: unknown, max: number) => typeof value === 'string' ? value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim().replace(/\s+/g, ' ').slice(0, max) : '';
+  app.post('/api/contact/messages', (req, res) => {
+    try {
+      if (typeof req.body?.name === 'string' && req.body.name.length > 120 || typeof req.body?.email === 'string' && req.body.email.length > 254 || typeof req.body?.subject === 'string' && req.body.subject.length > 160 || typeof req.body?.message === 'string' && req.body.message.length > 4000) return res.status(400).json({ error: 'Uno de los campos supera la longitud permitida.' });
+      const name = contactText(req.body?.name, 120);
+      const email = contactText(req.body?.email, 254).toLowerCase();
+      const subject = contactText(req.body?.subject, 160);
+      const message = typeof req.body?.message === 'string' ? req.body.message.replace(/\r\n/g, '\n').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim().slice(0, 4000) : '';
+      if (!name || !email || !subject || !message) return res.status(400).json({ error: 'Nombre, correo, asunto y mensaje son obligatorios.' });
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'El correo electrónico no es válido.' });
+      if (message.length < 3) return res.status(400).json({ error: 'El mensaje debe tener al menos 3 caracteres.' });
+      const recent = db.prepare('SELECT id FROM contact_messages WHERE email = ? AND subject = ? AND message = ? AND created_at >= ? LIMIT 1').get(email, subject, message, new Date(Date.now() - 5 * 60_000).toISOString());
+      if (recent) return res.status(409).json({ error: 'Este mensaje ya fue recibido. Evita enviarlo de nuevo.' });
+      const id = `msg-${crypto.randomUUID()}`;
+      const createdAt = new Date().toISOString();
+      db.prepare('INSERT INTO contact_messages (id, name, email, subject, message, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, name, email, subject, message, 'new', createdAt);
+      return res.status(201).json({ received: true, id, createdAt });
+    } catch { return res.status(503).json({ error: 'No fue posible recibir el mensaje. Intenta de nuevo.' }); }
+  });
 
   app.post('/api/analytics/events', (req, res) => {
     try {
@@ -234,15 +273,9 @@ async function startServer() {
       console.log(`[AUTH] Usuario registrado exitosamente en DB: ${userId} (${normalizedEmail})`);
 
       // Set session cookie (partitioned for iframe support)
-      res.cookie('amigurumis_mariai_session', token, {
-        httpOnly: true,
-        secure: true,
-        sameSite: 'none',
-        maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-      });
+      res.cookie('amigurumis_mariai_session', token, sessionCookieOptions());
 
       return res.status(201).json({
-        token,
         user: {
           id: userId,
           name: userName,
@@ -288,15 +321,9 @@ async function startServer() {
       `).run(token, user.id, new Date().toISOString(), expiresAt);
 
       // Set secure HTTP-only session cookie
-      res.cookie('amigurumis_mariai_session', token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 30 * 24 * 60 * 60 * 1000,
-      });
+      res.cookie('amigurumis_mariai_session', token, sessionCookieOptions());
 
       return res.json({
-        token,
         user: {
           id: user.id,
           name: user.name,
@@ -409,11 +436,7 @@ async function startServer() {
       }
     }
 
-    res.clearCookie('amigurumis_mariai_session', {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-    });
+    res.clearCookie('amigurumis_mariai_session', sessionCookieOptions());
 
     return res.json({ success: true, message: 'Sesión cerrada correctamente.' });
   });
@@ -635,6 +658,7 @@ async function startServer() {
     try {
       const { level, sessionId } = req.body;
       const levelNum = Number(level);
+      if (![1, 2, 3].includes(levelNum)) return res.status(400).json({ success: false, error: 'Nivel inválido.' });
 
       // 1. Validación estricta de nivel (solo 1, 2 o 3 permitidos)
       if (levelNum !== 1 && levelNum !== 2 && levelNum !== 3) {
@@ -655,15 +679,10 @@ async function startServer() {
       const cleanSessionId = sessionId.trim();
 
       // Verificar que la sesión provenga de una partida real registrada en el sistema
-      const validSession = db.prepare(`
-        SELECT session_id FROM btl_sessions WHERE session_id = ?
-        UNION
-        SELECT session_id FROM game_sessions WHERE session_id = ?
-        UNION
-        SELECT session_id FROM coupons WHERE session_id = ?
-      `).get(cleanSessionId, cleanSessionId, cleanSessionId);
-
-      if (!validSession) {
+      const authUser = getAuthUser(req);
+      const session = db.prepare('SELECT session_id, user_id, level, status FROM btl_sessions WHERE session_id = ?').get(cleanSessionId) as any;
+      const completed = db.prepare('SELECT user_id, level, victory FROM game_sessions WHERE session_id = ?').get(cleanSessionId) as any;
+      if (!session || !completed || session.status !== 'completed' || Number(completed.victory) !== 1 || Number(session.level) !== levelNum || Number(completed.level) !== levelNum || (session.user_id || null) !== (authUser?.id || null) || (completed.user_id || null) !== (authUser?.id || null)) {
         return res.status(403).json({
           success: false,
           error: 'Identificador de sesión no reconocido o inventado. Debes iniciar una partida válida.',
@@ -671,7 +690,6 @@ async function startServer() {
       }
 
       const percent = levelNum === 1 ? 5 : levelNum === 2 ? 10 : 15;
-      const authUser = getAuthUser(req);
       const userId = authUser?.id || null;
       const userEmail = authUser?.email || null;
 
@@ -736,6 +754,9 @@ async function startServer() {
       const expiresIso = new Date(now + 60 * 24 * 60 * 60 * 1000).toISOString(); // 60 días
       const targetType = userId ? 'exclusive' : 'general';
 
+      const issueReward = db.transaction(() => {
+      const claimed = db.prepare('SELECT code FROM coupons WHERE session_id = ? AND level_required = ?').get(cleanSessionId, levelNum);
+      if (claimed) return claimed as any;
       db.prepare(`
         INSERT INTO coupons (
           code, discount_percent, coupon_type, target_type, level_required, max_uses, times_used,
@@ -753,6 +774,10 @@ async function startServer() {
         expiresIso,
         nowIso
       );
+      return { code: generatedCode, discount_percent: percent, expires_at: expiresIso };
+      });
+      const issued = issueReward();
+      generatedCode = issued.code;
 
       return res.json({
         success: true,
@@ -808,7 +833,8 @@ async function startServer() {
 
       for (const item of items) {
         const pId = item.product?.id || item.productId || 'ami-custom';
-        const pQty = typeof item.quantity === 'number' && item.quantity > 0 ? Math.floor(item.quantity) : 1;
+        const pQty = item?.quantity;
+        if (!Number.isSafeInteger(pQty) || pQty <= 0 || pQty > 100) return res.status(400).json({ error: 'La cantidad debe ser un entero entre 1 y 100.' });
 
         const dbProduct = db.prepare('SELECT id, sku, name, price, stock_units, status, image_url FROM products WHERE id = ?').get(pId) as any;
         if (dbProduct) {
@@ -820,9 +846,7 @@ async function startServer() {
               error: `Inventario y stock insuficiente para "${dbProduct.name}". Unidades disponibles en stock: ${dbProduct.stock_units}, solicitadas: ${pQty}.`,
             });
           }
-          const price = (typeof item.product?.price === 'number' && item.product.price > 0 && typeof subtotal === 'number' && subtotal === item.product.price * pQty)
-            ? item.product.price
-            : dbProduct.price;
+          const price = dbProduct.price;
           calculatedSubtotal += price * pQty;
           verifiedItems.push({
             pId: dbProduct.id,
@@ -834,26 +858,16 @@ async function startServer() {
           });
         } else {
           // Producto artesanal personalizado o bajo comisión fuera de catálogo
-          const customPrice = typeof item.product?.price === 'number' ? item.product.price : (typeof item.price === 'number' ? item.price : 0);
-          calculatedSubtotal += customPrice * pQty;
-          verifiedItems.push({
-            pId,
-            pName: item.product?.name || item.productName || 'Figura artesanal personalizada',
-            pPrice: customPrice,
-            pQty,
-            pImg: item.product?.imageUrl || item.imageUrl || '',
-            isCatalogProduct: false,
-          });
+          return res.status(400).json({ error: 'El producto ya no está disponible en el catálogo.' });
         }
       }
 
-      if (calculatedSubtotal <= 0 && typeof subtotal === 'number') {
-        calculatedSubtotal = subtotal;
-      }
+      if (!Number.isFinite(calculatedSubtotal) || calculatedSubtotal <= 0) return res.status(400).json({ error: 'El subtotal del pedido no es válido.' });
 
       // Validar costo de envío autorizado
       const validShippingCost =
         shippingMethod === 'express' ? 18000 : shippingMethod === 'pickup' ? 0 : 12000;
+      if (!Number.isSafeInteger(validShippingCost) || !Number.isFinite(validShippingCost)) return res.status(400).json({ error: 'El costo de envío no es válido.' });
 
       // Validación autoritativa de cupón en el servidor
       let serverDiscount = 0;
@@ -903,6 +917,7 @@ async function startServer() {
       }
 
       const calculatedTotal = Math.max(0, calculatedSubtotal - serverDiscount) + validShippingCost;
+      if (!Number.isFinite(calculatedTotal) || calculatedTotal < 0) return res.status(400).json({ error: 'El total del pedido no es válido.' });
 
       const orderId = `AMI-CO-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
       const createdAt = new Date().toISOString();
@@ -1083,7 +1098,6 @@ async function startServer() {
           total: ord.total,
           status: ord.status,
           notes: ord.notes,
-          accessToken: ord.access_token,
           isSimulated: Boolean(ord.is_simulated !== 0),
           items: items.map((it: any) => ({
             id: it.id,
@@ -1227,10 +1241,7 @@ async function startServer() {
         (order.user_id && order.user_id === authUser.id) ||
         (order.customer_email && order.customer_email.toLowerCase() === authUser.email.toLowerCase())
       );
-      const providedToken = typeof req.query.token === 'string' ? req.query.token.trim() : null;
-      const hasValidToken = order.access_token && providedToken === order.access_token;
-
-      if (!isOwner && !hasValidToken) {
+      if (!isOwner) {
         return res.status(403).json({
           error: 'Acceso no autorizado al pedido. Debes haber iniciado sesión con la cuenta compradora o utilizar el enlace seguro con token de acceso generado al momento de la compra.',
         });
@@ -1264,7 +1275,6 @@ async function startServer() {
         total: order.total,
         status: order.status,
         notes: order.notes,
-        accessToken: order.access_token,
         isSimulated: Boolean(order.is_simulated !== 0),
         items: items.map((it: any) => ({
           id: it.id,
@@ -1355,7 +1365,8 @@ async function startServer() {
   app.post('/api/btl/session/start', (req, res) => {
     const authUser = getAuthUser(req);
     const { level } = req.body || {};
-    const levelNum = Number(level) === 2 ? 2 : Number(level) === 3 ? 3 : 1;
+    const levelNum = Number(level);
+    if (![1, 2, 3].includes(levelNum)) return res.status(400).json({ error: 'Nivel inválido.' });
     const sessionId = `btl-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
     const createdAt = new Date().toISOString();
 
@@ -1382,9 +1393,12 @@ async function startServer() {
   // POST /api/btl/level/complete
   app.post('/api/btl/level/complete', (req, res) => {
     const { game_session_id, sessionId, level, score, time_seconds, wool_collected } = req.body;
-    const activeSessionId = (game_session_id || sessionId || '').trim();
+    const activeSessionId = typeof (game_session_id || sessionId) === 'string' ? (game_session_id || sessionId).trim() : '';
     const authUser = getAuthUser(req);
-    const levelNum = Number(level) === 2 ? 2 : Number(level) === 3 ? 3 : 1;
+    const levelNum = Number(level);
+    if (![1, 2, 3].includes(levelNum) || !activeSessionId) return res.status(400).json({ error: 'Sesión o nivel inválido.' });
+    const btlSession = db.prepare('SELECT user_id, level, status FROM btl_sessions WHERE session_id = ?').get(activeSessionId) as any;
+    if (!btlSession || btlSession.status !== 'started' || Number(btlSession.level) !== levelNum || (btlSession.user_id || null) !== (authUser?.id || null)) return res.status(403).json({ error: 'La sesión no pertenece a este usuario, nivel o estado.' });
 
     let rewardPreview = null;
     if (levelNum === 1) rewardPreview = { level: 1, proposed_discount: '5% OFF' };
@@ -1393,26 +1407,13 @@ async function startServer() {
 
     try {
       const nowIso = new Date().toISOString();
-      if (activeSessionId) {
-        db.prepare(`
-          INSERT OR REPLACE INTO btl_sessions (session_id, user_id, level, status, created_at)
-          VALUES (?, ?, ?, 'completed', ?)
-        `).run(activeSessionId, authUser?.id || null, levelNum, nowIso);
-      }
-
-      db.prepare(`
-        INSERT OR REPLACE INTO game_sessions (session_id, user_id, level, score, wool_collected, time_seconds, victory, reward_proposed, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
-      `).run(
-        activeSessionId || `temp-${Date.now()}`,
-        authUser ? authUser.id : null,
-        levelNum,
-        score || 0,
-        wool_collected || 0,
-        time_seconds || 0,
-        rewardPreview ? rewardPreview.proposed_discount : null,
-        nowIso
-      );
+      const finish = db.transaction(() => {
+        const updated = db.prepare("UPDATE btl_sessions SET status='completed' WHERE session_id=? AND status='started'").run(activeSessionId);
+        if (!updated.changes) throw new Error('La sesión ya fue finalizada.');
+        db.prepare(`INSERT INTO game_sessions (session_id, user_id, level, score, wool_collected, time_seconds, victory, reward_proposed, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`)
+          .run(activeSessionId, authUser?.id || null, levelNum, Number.isFinite(Number(score)) ? Math.max(0, Math.floor(Number(score))) : 0, Number.isFinite(Number(wool_collected)) ? Math.max(0, Math.floor(Number(wool_collected))) : 0, Number.isFinite(Number(time_seconds)) ? Math.max(0, Math.floor(Number(time_seconds))) : 0, rewardPreview?.proposed_discount || null, nowIso);
+      });
+      finish();
     } catch (e) {
       console.warn('Game session logging warning:', e);
     }
@@ -1513,6 +1514,172 @@ async function startServer() {
     (req as any).adminUser = user;
     next();
   }
+
+  app.get('/api/admin/contact-messages', requireAdmin, (req, res) => {
+    const status = req.query.status === 'new' || req.query.status === 'read' ? req.query.status : null;
+    const rows = status
+      ? db.prepare('SELECT id, name, email, subject, message, status, created_at FROM contact_messages WHERE status = ? ORDER BY created_at DESC LIMIT 100').all(status)
+      : db.prepare('SELECT id, name, email, subject, message, status, created_at FROM contact_messages ORDER BY created_at DESC LIMIT 100').all();
+    return res.json({ messages: rows });
+  });
+
+  app.patch('/api/admin/contact-messages/:id/status', requireAdmin, (req, res) => {
+    const id = typeof req.params.id === 'string' ? req.params.id : '';
+    const status = req.body?.status;
+    if (!/^msg-[a-zA-Z0-9-]{16,80}$/.test(id) || !['new', 'read'].includes(status)) return res.status(400).json({ error: 'Actualización de estado inválida.' });
+    const result = db.prepare('UPDATE contact_messages SET status = ? WHERE id = ?').run(status, id);
+    if (!result.changes) return res.status(404).json({ error: 'Mensaje no encontrado.' });
+    return res.json({ id, status });
+  });
+
+  // Fase 3.2: bounded UTC period used exclusively by read-only analytics routes.
+  const analyticsPeriod = (req: express.Request): { start: string; end: string } | null => {
+    const now = new Date();
+    const rawStart = typeof req.query.start === 'string' ? req.query.start : '';
+    const rawEnd = typeof req.query.end === 'string' ? req.query.end : '';
+    const days = typeof req.query.period === 'string' ? Number(req.query.period) : 30;
+    if ((!rawStart && rawEnd) || (rawStart && !rawEnd)) return null;
+    let start: Date; let end: Date;
+    if (rawStart) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(rawStart) || !/^\d{4}-\d{2}-\d{2}$/.test(rawEnd)) return null;
+      start = new Date(`${rawStart}T00:00:00.000Z`); end = new Date(`${rawEnd}T23:59:59.999Z`);
+    } else {
+      if (![7, 30, 90].includes(days)) return null;
+      end = now; start = new Date(now.getTime() - (days - 1) * 86400000);
+      start.setUTCHours(0, 0, 0, 0);
+    }
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end || end.getTime() - start.getTime() > 366 * 86400000) return null;
+    return { start: start.toISOString(), end: end.toISOString() };
+  };
+  const analyticsRoute = (handler: (period: { start: string; end: string }, req: express.Request, res: express.Response) => void) =>
+    (req: express.Request, res: express.Response) => {
+      const period = analyticsPeriod(req);
+      if (!period) return res.status(400).json({ error: 'Periodo inválido. Use 7, 30, 90 o fechas UTC YYYY-MM-DD (máximo 366 días).' });
+      try { handler(period, req, res); } catch (err) { console.error('Analytics query failed:', err); return res.status(500).json({ error: 'No fue posible agregar las métricas.' }); }
+    };
+
+  app.get('/api/admin/analytics/sales', requireAdmin, analyticsRoute((period, _req, res) => {
+    const args = [period.start, period.end];
+    const kpis = db.prepare(`SELECT COUNT(*) totalOrders, SUM(CASE WHEN status != 'cancelado' THEN 1 ELSE 0 END) nonCancelledOrders, COALESCE(SUM(CASE WHEN status != 'cancelado' THEN total ELSE 0 END),0) simulatedAmount, COALESCE(AVG(CASE WHEN status != 'cancelado' THEN total END),0) simulatedAverageTicket FROM orders WHERE created_at BETWEEN ? AND ?`).get(...args) as any;
+    const ordersByStatus = db.prepare(`SELECT status, COUNT(*) count FROM orders WHERE created_at BETWEEN ? AND ? GROUP BY status ORDER BY count DESC`).all(...args);
+    const timeline = db.prepare(`SELECT substr(created_at,1,10) date, COUNT(*) count, COALESCE(SUM(CASE WHEN status != 'cancelado' THEN total ELSE 0 END),0) amount FROM orders WHERE created_at BETWEEN ? AND ? GROUP BY substr(created_at,1,10) ORDER BY date`).all(...args);
+    const topProducts = db.prepare(`SELECT oi.product_id productId, oi.product_name name, SUM(oi.quantity) count, SUM(oi.price * oi.quantity) amount FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE o.created_at BETWEEN ? AND ? AND o.status != 'cancelado' GROUP BY oi.product_id, oi.product_name ORDER BY count DESC, amount DESC LIMIT 12`).all(...args);
+    res.json({ period: { ...period, timezone: 'UTC' }, kpis, ordersByStatus, timeline, topProducts });
+  }));
+
+  app.get('/api/admin/analytics/customers', requireAdmin, analyticsRoute((period, _req, res) => {
+    const args = [period.start, period.end];
+    const registeredCustomers = (db.prepare(`SELECT COUNT(*) count FROM users WHERE role='customer'`).get() as any).count;
+    const newRegistrations = (db.prepare(`SELECT COUNT(*) count FROM users WHERE role='customer' AND created_at BETWEEN ? AND ?`).get(...args) as any).count;
+    const identifiable = db.prepare(`SELECT user_id, COUNT(*) orders FROM orders WHERE created_at BETWEEN ? AND ? AND status != 'cancelado' AND user_id IS NOT NULL GROUP BY user_id`).all(...args) as any[];
+    const registrations = db.prepare(`SELECT substr(created_at,1,10) date, COUNT(*) count FROM users WHERE role='customer' AND created_at BETWEEN ? AND ? GROUP BY substr(created_at,1,10) ORDER BY date`).all(...args);
+    const activity = db.prepare(`SELECT CASE WHEN orders >= 2 THEN 'Recurrentes (2+ pedidos)' ELSE 'Una compra' END label, COUNT(*) buyers FROM (SELECT user_id, COUNT(*) orders FROM orders WHERE created_at BETWEEN ? AND ? AND status != 'cancelado' AND user_id IS NOT NULL GROUP BY user_id) GROUP BY label`).all(...args);
+    res.json({ period: { ...period, timezone: 'UTC' }, kpis: { registeredCustomers, newRegistrations, identifiableBuyers: identifiable.length, recurringIdentifiableBuyers: identifiable.filter(r => r.orders >= 2).length, averageOrdersPerIdentifiableBuyer: identifiable.length ? Number((identifiable.reduce((n, r) => n + r.orders, 0) / identifiable.length).toFixed(2)) : 0 }, registrations, activity, notes: ['Compradores y recurrencia incluyen solo pedidos con user_id verificable; los invitados se excluyen para evitar deduplicación incierta.'] });
+  }));
+
+  app.get('/api/admin/analytics/behavior', requireAdmin, analyticsRoute((period, _req, res) => {
+    const args = [period.start, period.end];
+    const eventsByType = db.prepare(`SELECT event_name type, COUNT(*) events, COUNT(DISTINCT session_id) uniqueSessions FROM analytics_events WHERE occurred_at BETWEEN ? AND ? AND source='frontend' GROUP BY event_name ORDER BY events DESC`).all(...args) as any[];
+    const totals = Object.fromEntries(['product_viewed','product_searched','product_filtered','cart_item_added','checkout_started'].map(name => [name, eventsByType.find(e => e.type === name)?.events || 0]));
+    const timeline = db.prepare(`SELECT substr(occurred_at,1,10) date, COUNT(*) count FROM analytics_events WHERE occurred_at BETWEEN ? AND ? AND source='frontend' GROUP BY substr(occurred_at,1,10) ORDER BY date`).all(...args);
+    const topProducts = db.prepare(`SELECT e.entity_id productId, COALESCE(p.name, 'Producto retirado') name, COUNT(*) count FROM analytics_events e LEFT JOIN products p ON p.id=e.entity_id WHERE e.occurred_at BETWEEN ? AND ? AND e.source='frontend' AND e.entity_type='product' AND e.entity_id IS NOT NULL GROUP BY e.entity_id, p.name ORDER BY count DESC LIMIT 12`).all(...args);
+    res.json({ period: { ...period, timezone: 'UTC' }, kpis: { productViews: totals.product_viewed, searches: totals.product_searched, filters: totals.product_filtered, cartAdds: totals.cart_item_added, checkoutStarts: totals.checkout_started }, eventsByType, timeline, topProducts, consentNotice: 'Las métricas de comportamiento representan únicamente eventos registrados con consentimiento y no incluyen necesariamente a todos los visitantes.' });
+  }));
+
+  app.get('/api/admin/analytics/conversion', requireAdmin, analyticsRoute((period, _req, res) => {
+    const args = [period.start, period.end];
+    const countEvent = (name: string) => (db.prepare(`SELECT COUNT(*) count FROM analytics_events WHERE event_name=? AND occurred_at BETWEEN ? AND ? AND source='frontend'`).get(name, ...args) as any).count;
+    const orderCount = (db.prepare(`SELECT COUNT(*) count FROM orders WHERE created_at BETWEEN ? AND ?`).get(...args) as any).count;
+    const coupons = db.prepare(`SELECT COUNT(*) ordersWithCoupon, COALESCE(SUM(discount),0) simulatedDiscount FROM orders WHERE created_at BETWEEN ? AND ? AND coupon_code IS NOT NULL AND trim(coupon_code) != ''`).get(...args) as any;
+    const byType = db.prepare(`SELECT COALESCE(c.coupon_type,'sin clasificar') type, COUNT(*) count FROM orders o LEFT JOIN coupons c ON c.code=o.coupon_code WHERE o.created_at BETWEEN ? AND ? AND o.coupon_code IS NOT NULL AND trim(o.coupon_code) != '' GROUP BY COALESCE(c.coupon_type,'sin clasificar')`).all(...args);
+    res.json({ period: { ...period, timezone: 'UTC' }, funnel: [{ stage:'Visualización de producto', count:countEvent('product_viewed'), source:'telemetry' }, { stage:'Producto agregado al carrito', count:countEvent('cart_item_added'), source:'telemetry' }, { stage:'Checkout iniciado', count:countEvent('checkout_started'), source:'telemetry' }, { stage:'Pedido registrado', count:orderCount, source:'orders' }], sequentialRate: { available:false, reason:'No existe una relación verificable y completa entre sesiones con consentimiento y todos los pedidos.' }, coupons: { ...coupons, couponsUsed: coupons.ordersWithCoupon, byType } });
+  }));
+
+  app.get('/api/admin/analytics/game', requireAdmin, analyticsRoute((period, _req, res) => {
+    const args = [period.start, period.end];
+    const technicalSessions = (db.prepare(`SELECT COUNT(*) count FROM btl_sessions WHERE created_at BETWEEN ? AND ?`).get(...args) as any).count;
+    const victories = (db.prepare(`SELECT COUNT(*) count FROM game_sessions WHERE created_at BETWEEN ? AND ? AND victory=1`).get(...args) as any).count;
+    const victoriesByLevel = db.prepare(`SELECT level, COUNT(*) victories FROM game_sessions WHERE created_at BETWEEN ? AND ? AND victory=1 GROUP BY level ORDER BY level`).all(...args);
+    const btlCouponsGenerated = (db.prepare(`SELECT COUNT(*) count FROM coupons WHERE created_at BETWEEN ? AND ? AND coupon_type='btl'`).get(...args) as any).count;
+    const btlCouponsUsed = (db.prepare(`SELECT COUNT(*) count FROM orders o JOIN coupons c ON c.code=o.coupon_code WHERE o.created_at BETWEEN ? AND ? AND c.coupon_type='btl'`).get(...args) as any).count;
+    const simulatedAmountWithBtlCoupons = (db.prepare(`SELECT COALESCE(SUM(o.total),0) amount FROM orders o JOIN coupons c ON c.code=o.coupon_code WHERE o.created_at BETWEEN ? AND ? AND c.coupon_type='btl' AND o.status != 'cancelado'`).get(...args) as any).amount;
+    res.json({ period: { ...period, timezone: 'UTC' }, kpis: { technicalSessions, victories, btlCouponsGenerated, btlCouponsUsed, simulatedAmountWithBtlCoupons }, victoriesByLevel, notes: ['Las victorias son registros observados; no se presentan como tasa de finalización.', 'La asociación cupón-pedido no demuestra causalidad entre jugar y comprar.'] });
+  }));
+
+  // Fase 3.3: analytical read-only helpers. Previous periods have equal UTC duration.
+  const previousAnalyticsPeriod = (period: { start: string; end: string }) => {
+    const end = new Date(period.start).getTime() - 1;
+    const duration = new Date(period.end).getTime() - new Date(period.start).getTime();
+    return { start: new Date(end - duration).toISOString(), end: new Date(end).toISOString() };
+  };
+  const comparisonValues = (period: { start: string; end: string }) => {
+    const args = [period.start, period.end];
+    const order = db.prepare(`SELECT COUNT(*) totalOrders, SUM(CASE WHEN status!='cancelado' THEN 1 ELSE 0 END) activeOrders, COALESCE(SUM(CASE WHEN status!='cancelado' THEN total ELSE 0 END),0) simulatedAmount, COALESCE(AVG(CASE WHEN status!='cancelado' THEN total END),0) simulatedTicket, COALESCE(SUM(CASE WHEN status!='cancelado' THEN (SELECT COALESCE(SUM(quantity),0) FROM order_items WHERE order_id=orders.id) ELSE 0 END),0) units, SUM(CASE WHEN coupon_code IS NOT NULL AND trim(coupon_code)!='' THEN 1 ELSE 0 END) couponsUsed FROM orders WHERE created_at BETWEEN ? AND ?`).get(...args) as any;
+    const newCustomers = (db.prepare(`SELECT COUNT(*) count FROM users WHERE role='customer' AND created_at BETWEEN ? AND ?`).get(...args) as any).count;
+    const identifiable = (db.prepare(`SELECT COUNT(DISTINCT user_id) count FROM orders WHERE user_id IS NOT NULL AND status!='cancelado' AND created_at BETWEEN ? AND ?`).get(...args) as any).count;
+    const events = (db.prepare(`SELECT COUNT(*) count FROM analytics_events WHERE source='frontend' AND occurred_at BETWEEN ? AND ?`).get(...args) as any).count;
+    return { ...order, newCustomers, identifiable, events };
+  };
+  app.get('/api/admin/analytics/advanced/comparison', requireAdmin, analyticsRoute((period, _req, res) => {
+    const previous = previousAnalyticsPeriod(period); const current = comparisonValues(period); const before = comparisonValues(previous);
+    const definitions: [string, string, string][] = [['totalOrders','Total de pedidos','totalOrders'],['activeOrders','Pedidos vigentes','activeOrders'],['simulatedAmount','Importe comercial simulado','simulatedAmount'],['simulatedTicket','Ticket promedio simulado','simulatedTicket'],['newCustomers','Nuevos clientes registrados','newCustomers'],['identifiable','Compradores identificables','identifiable'],['units','Unidades vendidas','units'],['couponsUsed','Cupones utilizados','couponsUsed'],['events','Eventos consentidos','events']];
+    const metrics = definitions.map(([key,label,field]) => { const value=Number(current[field]||0), prior=Number(before[field]||0); return { key,label,current:value,previous:prior,absoluteChange:value-prior,percentageChange:prior === 0 ? null : Number((((value-prior)/prior)*100).toFixed(2)) }; });
+    res.json({ period:{...period,timezone:'UTC'}, previousPeriod:{...previous,timezone:'UTC'}, metrics, notes:['La variación porcentual solo se calcula cuando el periodo anterior es distinto de cero.', 'Eventos consentidos y registros comerciales son fuentes independientes.'] });
+  }));
+
+  app.get('/api/admin/analytics/advanced/segments', requireAdmin, analyticsRoute((period, _req, res) => {
+    const args=[period.start,period.end]; const total=(db.prepare(`SELECT COUNT(*) count FROM users WHERE role='customer'`).get() as any).count;
+    const queries: [string,string,string][] = [
+      ['new_registered','Clientes nuevos',`SELECT COUNT(*) count FROM users u WHERE u.role='customer' AND u.created_at BETWEEN ? AND ?`],
+      ['first_purchase','Primera compra identificable',`SELECT COUNT(*) count FROM (SELECT o.user_id, MIN(o.created_at) first_at FROM orders o JOIN users u ON u.id=o.user_id AND u.role='customer' WHERE o.user_id IS NOT NULL AND o.status!='cancelado' GROUP BY o.user_id) WHERE first_at BETWEEN ? AND ?`],
+      ['recurrent','Compradores recurrentes (2+ pedidos válidos)',`SELECT COUNT(*) count FROM (SELECT o.user_id FROM orders o JOIN users u ON u.id=o.user_id AND u.role='customer' WHERE o.user_id IS NOT NULL AND o.status!='cancelado' GROUP BY o.user_id HAVING COUNT(*)>=2)`],
+      ['active','Compradores activos',`SELECT COUNT(DISTINCT o.user_id) count FROM orders o JOIN users u ON u.id=o.user_id AND u.role='customer' WHERE o.user_id IS NOT NULL AND o.status!='cancelado' AND o.created_at BETWEEN ? AND ?`],
+      ['inactive','Compradores sin actividad reciente',`SELECT COUNT(*) count FROM (SELECT o.user_id, MAX(o.created_at) last_at FROM orders o JOIN users u ON u.id=o.user_id AND u.role='customer' WHERE o.user_id IS NOT NULL AND o.status!='cancelado' GROUP BY o.user_id) WHERE last_at < ?`],
+      ['registered_no_purchase','Registrados sin compras verificables',`SELECT COUNT(*) count FROM users u WHERE u.role='customer' AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.user_id=u.id AND o.status!='cancelado')`]
+    ];
+    const segments=queries.map(([code,description,sql])=>{ const row = code==='recurrent'||code==='registered_no_purchase' ? db.prepare(sql).get() as any : code==='inactive' ? db.prepare(sql).get(period.start) as any : db.prepare(sql).get(...args) as any; const users=Number(row.count||0); return {code,description,users,percentage:total?Number((users/total*100).toFixed(2)):null}; });
+    const rfmRows=db.prepare(`SELECT o.user_id, MAX(o.created_at) last_at, COUNT(*) frequency, SUM(o.total) monetary FROM orders o JOIN users u ON u.id=o.user_id AND u.role='customer' WHERE o.user_id IS NOT NULL AND o.status!='cancelado' GROUP BY o.user_id`).all() as any[];
+    const rfm=[['Reciente (≤30 días)',rfmRows.filter(r=>new Date(r.last_at)>=new Date(new Date(period.end).getTime()-30*86400000)).length],['Frecuente (2+ pedidos)',rfmRows.filter(r=>r.frequency>=2).length],['Mayor importe (≥100.000 COP)',rfmRows.filter(r=>r.monetary>=100000).length]].map(([label,users])=>({label:label as string,users:users as number}));
+    res.json({period:{...period,timezone:'UTC'},segments,rfm,notes:['Los segmentos se superponen y no representan una distribución exclusiva.', 'RFM es descriptivo para compradores identificables: reciente ≤30 días, frecuente ≥2 pedidos, mayor importe acumulado ≥100.000 COP.']});
+  }));
+
+  const productPerformance = (period: { start:string; end:string }) => db.prepare(`SELECT oi.product_id productId, oi.product_name name, SUM(oi.quantity) units, COUNT(DISTINCT o.id) orders, SUM(oi.price*oi.quantity) simulatedLineSubtotal FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE o.status!='cancelado' AND o.created_at BETWEEN ? AND ? GROUP BY oi.product_id,oi.product_name ORDER BY units DESC,simulatedLineSubtotal DESC LIMIT 100`).all(period.start,period.end) as any[];
+  app.get('/api/admin/analytics/advanced/products', requireAdmin, analyticsRoute((period,_req,res)=>{
+    const previous=previousAnalyticsPeriod(period); const current=productPerformance(period); const before=new Map(productPerformance(previous).map(r=>[r.productId,r])); const unitTotal=current.reduce((n,r)=>n+r.units,0); const amountTotal=current.reduce((n,r)=>n+r.simulatedLineSubtotal,0);
+    const products=current.map(r=>({...r,unitShare:unitTotal?Number((r.units/unitTotal*100).toFixed(2)):null,amountShare:amountTotal?Number((r.simulatedLineSubtotal/amountTotal*100).toFixed(2)):null,previousUnits:Number(before.get(r.productId)?.units||0),unitChange:r.units-Number(before.get(r.productId)?.units||0)}));
+    const timeline=db.prepare(`SELECT substr(o.created_at,1,10) date, SUM(oi.quantity) count FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE o.status!='cancelado' AND o.created_at BETWEEN ? AND ? GROUP BY substr(o.created_at,1,10) ORDER BY date`).all(period.start,period.end);
+    res.json({period:{...period,timezone:'UTC'},products,timeline,notes:['El importe por producto es el subtotal de líneas antes de descuentos; no se distribuyen descuentos de pedidos.', 'La identidad se agrupa por product_id, incluso cuando el nombre comercial coincide.']});
+  }));
+
+  const csvCell = (value: unknown) => { let text=String(value ?? ''); if (/^[=+\-@]/.test(text)) text=`'${text}`; return `"${text.replace(/"/g,'""')}"`; };
+  app.get('/api/admin/analytics/advanced/export', requireAdmin, analyticsRoute((period,req,res)=>{
+    const type=typeof req.query.type==='string'?req.query.type:''; if (!['timeline','products','segments','events'].includes(type)) return res.status(400).json({error:'Tipo de exportación inválido.'});
+    let headers:string[]=[]; let rows:any[][]=[]; const args=[period.start,period.end];
+    if(type==='timeline'){ headers=['fecha_utc','pedidos','pedidos_vigentes','unidades_vendidas','importe_simulado_cop','nuevos_registros','cupones_utilizados']; rows=db.prepare(`WITH order_days AS (SELECT substr(o.created_at,1,10) date,COUNT(*) orders,SUM(CASE WHEN o.status!='cancelado' THEN 1 ELSE 0 END) activeOrders,COALESCE(SUM(CASE WHEN o.status!='cancelado' THEN (SELECT SUM(quantity) FROM order_items WHERE order_id=o.id) ELSE 0 END),0) units,COALESCE(SUM(CASE WHEN o.status!='cancelado' THEN o.total ELSE 0 END),0) amount,COALESCE(SUM(CASE WHEN o.coupon_code IS NOT NULL AND trim(o.coupon_code)!='' THEN 1 ELSE 0 END),0) coupons FROM orders o WHERE o.created_at BETWEEN ? AND ? GROUP BY substr(o.created_at,1,10)), user_days AS (SELECT substr(created_at,1,10) date,COUNT(*) newCustomers FROM users WHERE role='customer' AND created_at BETWEEN ? AND ? GROUP BY substr(created_at,1,10)) SELECT date,SUM(orders) orders,SUM(activeOrders) activeOrders,SUM(units) units,SUM(amount) amount,SUM(newCustomers) newCustomers,SUM(coupons) coupons FROM (SELECT date,orders,activeOrders,units,amount,0 newCustomers,coupons FROM order_days UNION ALL SELECT date,0,0,0,0,newCustomers,0 FROM user_days) GROUP BY date ORDER BY date`).all(...args,...args).map((r:any)=>[r.date,r.orders,r.activeOrders,r.units,r.amount,r.newCustomers,r.coupons]); }
+    if(type==='products'){ headers=['producto_id','nombre_comercial','unidades_vendidas','pedidos_asociados','subtotal_simulado_antes_descuentos_cop','participacion_unidades_pct']; const rowsData=productPerformance(period); const total=rowsData.reduce((n,r)=>n+r.units,0); rows=rowsData.map(r=>[r.productId,r.name,r.units,r.orders,r.simulatedLineSubtotal,total?Number((r.units/total*100).toFixed(2)):null]); }
+    if(type==='segments'){ headers=['codigo_segmento','descripcion','usuarios','porcentaje_sobre_registrados']; const total=(db.prepare(`SELECT COUNT(*) count FROM users WHERE role='customer'`).get() as any).count; const valid=`FROM orders o JOIN users u ON u.id=o.user_id AND u.role='customer' WHERE o.user_id IS NOT NULL AND o.status!='cancelado'`; const values=[['new_registered','Clientes nuevos',(db.prepare(`SELECT COUNT(*) count FROM users WHERE role='customer' AND created_at BETWEEN ? AND ?`).get(...args)as any).count],['first_purchase','Primera compra identificable',(db.prepare(`SELECT COUNT(*) count FROM (SELECT o.user_id,MIN(o.created_at) first_at ${valid} GROUP BY o.user_id) WHERE first_at BETWEEN ? AND ?`).get(...args)as any).count],['recurrent','Compradores recurrentes',(db.prepare(`SELECT COUNT(*) count FROM (SELECT o.user_id ${valid} GROUP BY o.user_id HAVING COUNT(*)>=2)`).get()as any).count],['active','Compradores activos',(db.prepare(`SELECT COUNT(DISTINCT o.user_id) count ${valid} AND o.created_at BETWEEN ? AND ?`).get(...args)as any).count],['inactive','Compradores sin actividad reciente',(db.prepare(`SELECT COUNT(*) count FROM (SELECT o.user_id,MAX(o.created_at) last_at ${valid} GROUP BY o.user_id) WHERE last_at < ?`).get(period.start)as any).count],['registered_no_purchase','Registrados sin compras verificables',(db.prepare(`SELECT COUNT(*) count FROM users u WHERE u.role='customer' AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.user_id=u.id AND o.status!='cancelado')`).get()as any).count]]; rows=values.map(([code,description,count])=>[code,description,count,total?Number((Number(count)/total*100).toFixed(2)):null]); }
+    if(type==='events'){ headers=['fecha_utc','tipo_evento','numero_eventos']; rows=db.prepare(`SELECT substr(occurred_at,1,10) date,event_name,COUNT(*) count FROM analytics_events WHERE source='frontend' AND occurred_at BETWEEN ? AND ? GROUP BY substr(occurred_at,1,10),event_name ORDER BY date,event_name LIMIT 10000`).all(...args).map((r:any)=>[r.date,r.event_name,r.count]); }
+    const content='\uFEFF'+[headers,...rows].map(row=>row.map(csvCell).join(',')).join('\r\n'); res.setHeader('Content-Type','text/csv; charset=utf-8'); res.setHeader('Content-Disposition',`attachment; filename="mariai_${type}_${period.start.slice(0,10)}_${period.end.slice(0,10)}.csv"`); res.send(content);
+  }));
+
+  // Fase 4: Express only reads validated, pre-generated ML artifacts. It never starts Python.
+  const mlArtifact = (name: 'manifest'|'data_quality'|'evaluation'|'predictions') => {
+    try {
+      const artifactsRoot = path.resolve(process.cwd(), 'ml', 'artifacts');
+      const currentManifestPath = path.join(artifactsRoot, 'manifest.json');
+      const currentManifest = JSON.parse(fs.readFileSync(currentManifestPath, 'utf8'));
+      if (!/^[a-f0-9-]{36}$/i.test(currentManifest.run_id) || !['real_commercial','synthetic_academic'].includes(currentManifest.data_source)) return null;
+      const file = path.resolve(artifactsRoot, 'runs', currentManifest.run_id, `${name}.json`);
+      const root = path.resolve(artifactsRoot, 'runs') + path.sep;
+      if (!file.startsWith(root) || !fs.existsSync(file)) return null;
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (!parsed || typeof parsed !== 'object' || parsed.run_id && parsed.run_id !== currentManifest.run_id || parsed.data_source !== currentManifest.data_source) return null;
+      return parsed;
+    } catch { return null; }
+  };
+  app.get('/api/admin/ml/status', requireAdmin, (_req,res) => { const manifest=mlArtifact('manifest'); const quality=mlArtifact('data_quality'); return res.json({ status: !manifest?'no_experiments':manifest.training_status==='skipped'?'insufficient':manifest.data_source==='synthetic_academic'?'academic_available':'real_evaluation_available', manifest, commercialDatabase: 'available', warnings: manifest?.data_source==='synthetic_academic'?['Demostración académica con datos sintéticos; no representa resultados comerciales.']:[] }); });
+  for (const name of ['data_quality','evaluation','predictions','manifest'] as const) app.get(`/api/admin/ml/${name.replace('_','-')}`, requireAdmin, (_req,res) => { const artifact=mlArtifact(name); if(!artifact) return res.status(404).json({error:'Artefacto ML no disponible o inválido.'}); return res.json({artifact}); });
+  app.get('/api/admin/ml/experiments', requireAdmin, (_req,res) => { const manifest=mlArtifact('manifest'); return res.json({experiments:manifest?[manifest]:[]}); });
 
   // GET /api/admin/me - Perfil y verificación del administrador actual
   app.get('/api/admin/me', requireAdmin, (req, res) => {

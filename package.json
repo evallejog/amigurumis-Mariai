@@ -10,7 +10,15 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test:phase-3-1": "tsx scripts/test-phase-3-1.ts"
+    "test:phase-3-1": "tsx scripts/test-phase-3-1.ts",
+    "test:phase-3-2": "tsx scripts/test-phase-3-2.ts",
+    "test:phase-3-3": "tsx scripts/test-phase-3-3.ts",
+    "test:auth-cookies": "tsx scripts/test-auth-cookies.ts",
+    "test:ml-evaluation": "tsx scripts/test-ml-evaluation.tsx",
+    "test:charts": "tsx scripts/test-charts.tsx",
+    "test:game-layout": "tsx scripts/test-game-layout.ts",
+    "test:contact-messages": "tsx scripts/test-contact-messages.ts",
+    "test:checkout-transition": "tsx scripts/test-checkout-transition.ts"
   },
   "dependencies": {
     "@google/genai": "^3.0.0",

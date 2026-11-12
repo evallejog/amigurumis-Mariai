@@ -1,0 +1,19 @@
+import React, { useState } from 'react';
+export type Dataset = Record<string, any>;
+export const money = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 });
+export const number = new Intl.NumberFormat('es-CO');
+export const statusLabel = (status: string) => ({ pedido_recibido: 'Pedido recibido', pendiente_pago: 'Pendiente de pago', pago_confirmado: 'Pago confirmado', en_preparacion: 'En preparación', enviado: 'Enviado', entregado: 'Entregado', cancelado: 'Cancelado' }[status] || status.replaceAll('_', ' '));
+export function KpiCard({ label, value, note }: { label: string; value: string | number; note?: string }) { return <div className="rounded-2xl border border-white/80 bg-white/75 p-4 shadow-sm backdrop-blur-xl"><p className="text-[10px] font-bold uppercase tracking-wider text-stone-500">{label}</p><p className="mt-1 text-2xl font-extrabold tracking-tight text-stone-900">{value}</p>{note && <p className="mt-1 text-[10px] leading-relaxed text-stone-500">{note}</p>}</div>; }
+export function Bars({ rows, labelKey = 'name', valueKey = 'count', format = number.format, legend = 'Valor observado' }: { rows?: any[] | null; labelKey?: string; valueKey?: string; format?: (value: number) => string; legend?: string }) {
+  const [selected, setSelected] = useState<number | null>(null);
+  const safeRows = Array.isArray(rows) ? rows : [];
+  if (!safeRows.length) return <p role="status" className="rounded-xl bg-stone-50 p-4 text-xs text-stone-500">No hay información registrada para este periodo.</p>;
+  const numeric = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : null;
+  const shown = safeRows.slice(0, 16);
+  const max = Math.max(...shown.map((row) => numeric(row?.[valueKey]) ?? 0), 1);
+  return <div className="space-y-2" aria-label={`Gráfico de barras: ${legend}`}>
+    <p className="text-[10px] text-stone-500"><span className="mr-1 inline-block h-2 w-2 rounded-full bg-amber-500" aria-hidden="true"/>{legend}. Selecciona una barra para ver el valor.</p>
+    <div className="space-y-2">{shown.map((row, i) => { const raw=row?.[valueKey], value=numeric(raw), label=String(row?.[labelKey] ?? 'Sin etiqueta'), state=value===null ? (raw===null || raw===undefined ? 'Dato no disponible' : 'Dato inválido') : format(value); const isSelected=selected===i; return <button key={`${label}-${row?.productId || i}`} type="button" onClick={() => setSelected(isSelected ? null : i)} aria-pressed={isSelected} aria-label={`${label}: ${state}`} className={`grid w-full grid-cols-[minmax(72px,1fr)_minmax(80px,3fr)_auto] items-center gap-2 rounded-lg px-1 py-1 text-left text-xs transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700 ${isSelected ? 'bg-amber-50' : 'hover:bg-stone-50'}`}><span className="truncate text-stone-600" title={label}>{label}</span><span className="h-2 overflow-hidden rounded-full bg-stone-100"><span className="block h-full rounded-full bg-gradient-to-r from-amber-400 to-rose-400 transition-[width] duration-200 motion-reduce:transition-none" style={{ width: `${value === null ? 0 : Math.max(0, value / max * 100)}%` }}/></span><strong className={value === null ? 'text-rose-700' : 'text-stone-700'}>{state}</strong>{isSelected && <span className="col-span-3 rounded-md bg-white px-2 py-1 text-[10px] text-stone-600 shadow-sm">{label}: {state}</span>}</button>; })}</div>
+  </div>;
+}
+export function Section({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) { return <section className="rounded-3xl border border-white/80 bg-white/55 p-4 sm:p-6 shadow-sm backdrop-blur-xl"><h3 className="mb-4 flex items-center gap-2 text-sm font-extrabold text-stone-900">{icon}{title}</h3>{children}</section>; }

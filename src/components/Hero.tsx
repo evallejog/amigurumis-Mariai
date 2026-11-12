@@ -11,7 +11,7 @@ export const Hero: React.FC<HeroProps> = ({
   onNavigateToCustomizer,
 }) => {
   return (
-    <section className="relative pt-8 pb-16 sm:pt-14 sm:pb-24 overflow-hidden">
+    <section className="relative pt-8 pb-8 sm:pt-14 sm:pb-12 overflow-hidden">
       {/* Background ambient liquid orbs */}
       <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[350px] bg-gradient-to-tr from-amber-200/25 via-rose-200/20 to-emerald-100/20 rounded-full blur-3xl pointer-events-none -z-10" />
 
@@ -29,7 +29,7 @@ export const Hero: React.FC<HeroProps> = ({
             </h1>
 
             <p className="text-base sm:text-lg text-stone-600 max-w-xl mx-auto lg:mx-0 font-normal leading-relaxed">
-              Descubre criaturas mágicas tejidas a mano con hilo 100% algodón orgánico,
+              Descubre criaturas mágicas tejidas a mano con hilos seleccionados,
               o sumérgete en nuestro minivideojuego de plataformas 2D para acompañar a Pompón,
               rescatar los ovillos perdidos y desbloquear beneficios exclusivos.
             </p>
@@ -57,16 +57,16 @@ export const Hero: React.FC<HeroProps> = ({
             {/* Adjacent Trust Proof Strip (Adjacency requirement) */}
             <div className="pt-8 border-t border-stone-200/60 grid grid-cols-3 gap-4 text-center lg:text-left">
               <div>
-                <span className="block text-xl sm:text-2xl font-bold font-sans text-stone-900 tabular-nums">100%</span>
-                <span className="text-xs text-stone-500 font-medium">Algodón natural peinado</span>
+                <span className="block text-sm sm:text-base font-bold font-sans text-stone-900">Tejido</span>
+                <span className="text-xs text-stone-500 font-medium">Con atención al detalle</span>
               </div>
               <div>
-                <span className="block text-xl sm:text-2xl font-bold font-sans text-stone-900 tabular-nums">+1.400</span>
-                <span className="text-xs text-stone-500 font-medium">Horas de tejido artesanal</span>
+                <span className="block text-sm sm:text-base font-bold font-sans text-stone-900">Artesanal</span>
+                <span className="text-xs text-stone-500 font-medium">Piezas hechas a mano</span>
               </div>
               <div>
-                <span className="block text-xl sm:text-2xl font-bold font-sans text-stone-900 tabular-nums">0%</span>
-                <span className="text-xs text-stone-500 font-medium">Plásticos no biodegradables</span>
+                <span className="block text-sm sm:text-base font-bold font-sans text-stone-900">Cercano</span>
+                <span className="text-xs text-stone-500 font-medium">Diseños para explorar</span>
               </div>
             </div>
           </div>

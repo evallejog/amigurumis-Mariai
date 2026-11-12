@@ -5,9 +5,9 @@ export const AboutSection: React.FC = () => {
   const pillars = [
     {
       icon: Feather,
-      title: 'Hilo 100% Algodón Peinado',
+      title: 'Selección de hilos',
       description:
-        'Seleccionamos fibras vegetales nobles de origen nacional, teñidas con pigmentos al agua no tóxicos. El tacto es sedoso, seguro para la piel de recién nacidos y totalmente transpirable.',
+        'Elegimos hilos por su textura y acabado para dar forma a cada diseño. Consulta los materiales concretos antes de elegir una pieza.',
     },
     {
       icon: Compass,
@@ -17,9 +17,9 @@ export const AboutSection: React.FC = () => {
     },
     {
       icon: Shield,
-      title: 'Seguridad Infantil Certificada',
+      title: 'Detalles de confección',
       description:
-        'Ojos con arandela de anclaje interno irremovible y costuras dobles reforzadas. El relleno de vellón siliconado es hipoalergénico, inodoro y lavable a mano.',
+        'Cuidamos las uniones y los acabados de cada pieza. Consulta la ficha del producto y sus indicaciones de uso antes de adquirirlo.',
     },
     {
       icon: Sparkles,
@@ -52,7 +52,7 @@ export const AboutSection: React.FC = () => {
           return (
             <div
               key={pillar.title}
-              className="liquid-glass rounded-3xl p-6 sm:p-7 border border-white/70 shadow-sm hover:shadow-lg transition-all duration-300 flex flex-col justify-between"
+              className="liquid-glass rounded-3xl p-6 sm:p-7 border border-white/70 shadow-sm flex flex-col justify-between transition-[transform,box-shadow,border-color] duration-300 ease-out hover:-translate-y-1 hover:border-[#C87D55]/60 hover:shadow-xl active:-translate-y-0.5 active:border-[#C87D55]/60 motion-reduce:transition-none motion-reduce:hover:translate-y-0 motion-reduce:active:translate-y-0"
             >
               <div>
                 <div className="w-11 h-11 rounded-2xl bg-amber-100/60 border border-amber-200/50 flex items-center justify-center text-amber-900 mb-5 shadow-2xs">

@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { generateGameTextures } from '../textures';
 import { GameTelemetryPayload } from '../types';
+import { LEVEL_SCISSORS, LEVEL_WOOL } from '../levelLayout';
 
 export interface LevelSceneData {
   levelNumber: 1 | 2 | 3;
@@ -138,8 +139,8 @@ export class LevelScene extends Phaser.Scene {
     // CRÍTICO: Bounce en 0 para evitar que micro-rebotes anulen el estado en suelo
     this.player.setBounce(0);
     this.player.setGravityY(820);
-    this.player.body!.setSize(26, 36);
-    this.player.body!.setOffset(7, 8);
+    this.player.body!.setSize(34, 42);
+    this.player.body!.setOffset(9, 12);
 
     // Colisiones
     this.physics.add.collider(this.player, this.platforms);
@@ -594,10 +595,7 @@ export class LevelScene extends Phaser.Scene {
       this.createFeltPlatform(1580, 260, 2);
 
       // Ovillos de lana accesibles
-      [220, 300, 380, 530, 600, 780, 850, 1050, 1120, 1190, 1350, 1580, 1650].forEach((x, i) => {
-        const y = i % 2 === 0 ? 350 : 270;
-        this.createWoolBall(x, y);
-      });
+      LEVEL_WOOL[1].forEach(({ x, y }) => this.createWoolBall(x, y));
 
       // Botones de madera dorada (+50 pts)
       this.createButtonBonus(780, 230);
@@ -626,16 +624,13 @@ export class LevelScene extends Phaser.Scene {
       this.createFeltPlatform(1820, 230, 2);
       this.createFeltPlatform(2120, 330, 3);
 
-      for (let x = 200; x < 2300; x += 110) {
-        this.createWoolBall(x, 270 + (x % 3) * 30);
-      }
+      LEVEL_WOOL[2].forEach(({ x, y }) => this.createWoolBall(x, y));
 
       this.createButtonBonus(720, 250);
       this.createButtonBonus(1240, 290);
       this.createButtonBonus(1840, 170);
 
-      this.createScissors(820, 300);
-      this.createScissors(1420, 280);
+      LEVEL_SCISSORS[2].forEach((scissor) => this.createScissors(scissor.x, scissor.y, scissor.amplitude, scissor.duration));
       this.createPin(1220, 320);
       this.createDustBunny(1230, 310, 1200, 1380);
 
@@ -659,17 +654,13 @@ export class LevelScene extends Phaser.Scene {
       this.createFeltPlatform(2500, 230, 2);
       this.createFeltPlatform(2760, 330, 3);
 
-      for (let x = 180; x < 2900; x += 95) {
-        this.createWoolBall(x, 140 + (x % 4) * 40);
-      }
+      LEVEL_WOOL[3].forEach(({ x, y }) => this.createWoolBall(x, y));
 
       this.createButtonBonus(600, 200);
       this.createButtonBonus(1000, 120);
       this.createButtonBonus(2060, 130);
 
-      this.createScissors(900, 240);
-      this.createScissors(1680, 270);
-      this.createScissors(2420, 210);
+      LEVEL_SCISSORS[3].forEach((scissor) => this.createScissors(scissor.x, scissor.y, scissor.amplitude, scissor.duration));
       this.createPin(1530, 280);
       this.createPin(2770, 300);
       this.createDustBunny(2760, 290, 2740, 2950);
@@ -741,12 +732,17 @@ export class LevelScene extends Phaser.Scene {
     pin.refreshBody();
   }
 
-  private createScissors(x: number, y: number) {
+  private createScissors(x: number, y: number, amplitude = 24, duration = 1300) {
     const scissor = this.hazardScissors.create(x, y, 'scissor-hazard');
+    scissor.body.setAllowGravity(false);
+    scissor.body.setImmovable(true);
+    scissor.setData('minY', y - amplitude);
+    scissor.setData('maxY', y + amplitude);
     this.tweens.add({
       targets: scissor,
+      y: { from: y - amplitude, to: y + amplitude },
       angle: { from: -15, to: 15 },
-      duration: 1000,
+      duration,
       yoyo: true,
       repeat: -1,
       ease: 'Sine.easeInOut',
@@ -941,6 +937,7 @@ export class LevelScene extends Phaser.Scene {
   public pauseGame() {
     this.isGamePaused = true;
     this.physics.pause();
+    this.tweens.pauseAll();
     this.keysHeldState = { left: false, right: false, jump: false };
     this.touchLeft = false;
     this.touchRight = false;
@@ -953,6 +950,7 @@ export class LevelScene extends Phaser.Scene {
   public resumeGame() {
     this.isGamePaused = false;
     this.physics.resume();
+    this.tweens.resumeAll();
   }
 
   private playDoubleJumpSound() {

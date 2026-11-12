@@ -11,9 +11,11 @@ export function generateGameTextures(scene: Phaser.Scene) {
   // 1. POMPÓN (PROTAGONISTA - REPOSO / CARRERA)
   if (!textures.exists('pompon')) {
     const canvas = document.createElement('canvas');
-    canvas.width = 40;
-    canvas.height = 46;
+    canvas.width = 52;
+    canvas.height = 60;
     const ctx = canvas.getContext('2d')!;
+    // Más presencia a escala móvil sin cambiar la identidad del personaje.
+    ctx.scale(1.3, 1.3);
 
     // Orejas de fieltro
     ctx.fillStyle = '#F5EBE1';
@@ -50,6 +52,15 @@ export function generateGameTextures(scene: Phaser.Scene) {
     ctx.fill();
     ctx.stroke();
 
+    // Puntadas cortas para reforzar la lectura de amigurumi a tamaño reducido.
+    ctx.strokeStyle = '#DED2C4';
+    ctx.lineWidth = 0.75;
+    for (let x = 10; x <= 30; x += 5) {
+      ctx.beginPath();
+      ctx.arc(x, 20 + ((x / 5) % 2) * 3, 1.2, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
     // Textura sutil de puntadas de crochet
     ctx.strokeStyle = '#EBE1D5';
     ctx.lineWidth = 1;
@@ -65,6 +76,16 @@ export function generateGameTextures(scene: Phaser.Scene) {
     ctx.arc(15, 24, 2.5, 0, Math.PI * 2);
     ctx.arc(25, 24, 2.5, 0, Math.PI * 2);
     ctx.fill();
+
+    // Boca bordada suave para una expresión reconocible.
+    ctx.strokeStyle = '#A8603B';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(20, 29);
+    ctx.quadraticCurveTo(18, 32, 16.5, 30.5);
+    ctx.moveTo(20, 29);
+    ctx.quadraticCurveTo(22, 32, 23.5, 30.5);
+    ctx.stroke();
 
     // Brillo en los ojos
     ctx.fillStyle = '#FFFFFF';

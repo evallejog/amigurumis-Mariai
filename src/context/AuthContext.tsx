@@ -16,7 +16,6 @@ export interface User {
 
 interface AuthContextType {
   user: User | null;
-  token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   isAuthModalOpen: boolean;
@@ -39,16 +38,7 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const TOKEN_KEY = 'amigurumis_mariai_auth_token';
-
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [token, setToken] = useState<string | null>(() => {
-    try {
-      return localStorage.getItem(TOKEN_KEY);
-    } catch {
-      return null;
-    }
-  });
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
@@ -63,24 +53,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setIsAuthModalOpen(false);
   };
 
-  // Fetch current user if token exists or via HttpOnly cookie
-  const fetchCurrentUser = async (authToken: string): Promise<User | null> => {
+  // Restore the session from the HttpOnly cookie.
+  const fetchCurrentUser = async (): Promise<User | null> => {
     try {
-      const res = await fetch('/api/auth/me', {
-        headers: authToken
-          ? {
-              Authorization: `Bearer ${authToken}`,
-            }
-          : undefined,
-      });
+      const res = await fetch('/api/auth/me', { credentials: 'same-origin' });
       if (res.ok) {
         const data = await res.json();
         return data.user;
       } else {
-        if (authToken) {
-          localStorage.removeItem(TOKEN_KEY);
-          setToken(null);
-        }
         return null;
       }
     } catch {
@@ -90,15 +70,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   useEffect(() => {
     const initAuth = async () => {
-      const currentUser = await fetchCurrentUser(token || '');
+      const currentUser = await fetchCurrentUser();
       setUser(currentUser);
       setIsLoading(false);
     };
     initAuth();
-  }, [token]);
+  }, []);
 
   const refreshUser = async () => {
-    const currentUser = await fetchCurrentUser(token || '');
+    const currentUser = await fetchCurrentUser();
     setUser(currentUser);
   };
 
@@ -107,6 +87,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const normalizedEmail = (email || '').trim().toLowerCase();
       const res = await fetch('/api/auth/login', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: normalizedEmail, password }),
       });
@@ -115,9 +96,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         return { success: false, error: data.error || 'Error al iniciar sesión' };
       }
 
-      setToken(data.token);
       setUser(data.user);
-      localStorage.setItem(TOKEN_KEY, data.token);
       setIsAuthModalOpen(false);
       return { success: true };
     } catch (err: any) {
@@ -142,6 +121,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       };
       const res = await fetch('/api/auth/register', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(normalizedData),
       });
@@ -150,9 +130,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         return { success: false, error: resData.error || 'Error al crear la cuenta' };
       }
 
-      setToken(resData.token);
       setUser(resData.user);
-      localStorage.setItem(TOKEN_KEY, resData.token);
       setIsAuthModalOpen(false);
       return { success: true };
     } catch (err: any) {
@@ -161,24 +139,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const logout = async () => {
-    if (token) {
-      try {
-        await fetch('/api/auth/logout', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-        });
-      } catch {}
-    }
-    setToken(null);
+    try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }); } catch {}
     setUser(null);
-    localStorage.removeItem(TOKEN_KEY);
   };
 
   return (
     <AuthContext.Provider
       value={{
         user,
-        token,
         isAuthenticated: !!user,
         isLoading,
         isAuthModalOpen,

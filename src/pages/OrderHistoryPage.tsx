@@ -66,7 +66,6 @@ interface OrderRecord {
   paymentMethod: string;
   status: string;
   notes?: string;
-  accessToken?: string;
   isSimulated?: boolean;
   createdAt: string;
   items: OrderItem[];
@@ -88,7 +87,7 @@ interface UserCoupon {
 
 export const OrderHistoryPage: React.FC = () => {
   const navigate = useNavigate();
-  const { user, token, isAuthenticated, openAuthModal } = useAuth();
+  const { user, isAuthenticated, openAuthModal } = useAuth();
   const [activeTab, setActiveTab] = useState<'orders' | 'coupons'>('orders');
   const [orders, setOrders] = useState<OrderRecord[]>([]);
   const [personalCoupons, setPersonalCoupons] = useState<UserCoupon[]>([]);
@@ -100,7 +99,7 @@ export const OrderHistoryPage: React.FC = () => {
 
   useEffect(() => {
     const fetchOrders = async () => {
-      if (!token) {
+      if (!isAuthenticated) {
         setLoading(false);
         return;
       }
@@ -108,11 +107,7 @@ export const OrderHistoryPage: React.FC = () => {
       try {
         setLoading(true);
         setError(null);
-        const res = await fetch('/api/orders/my-orders', {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
+        const res = await fetch('/api/orders/my-orders', { credentials: 'same-origin' });
 
         if (!res.ok) {
           throw new Error('No fue posible cargar tu historial de compras');
@@ -128,17 +123,13 @@ export const OrderHistoryPage: React.FC = () => {
     };
 
     fetchOrders();
-  }, [token]);
+  }, [isAuthenticated]);
 
   const fetchCoupons = async () => {
-    if (!token) return;
+    if (!isAuthenticated) return;
     try {
       setLoadingCoupons(true);
-      const res = await fetch('/api/user/coupons', {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      const res = await fetch('/api/user/coupons', { credentials: 'same-origin' });
       if (res.ok) {
         const data = await res.json();
         setPersonalCoupons(data.personalCoupons || []);
@@ -152,10 +143,10 @@ export const OrderHistoryPage: React.FC = () => {
   };
 
   useEffect(() => {
-    if (activeTab === 'coupons' && isAuthenticated && token) {
+    if (activeTab === 'coupons' && isAuthenticated) {
       fetchCoupons();
     }
-  }, [activeTab, isAuthenticated, token]);
+  }, [activeTab, isAuthenticated]);
 
   const handleCopyCode = (code: string) => {
     navigator.clipboard.writeText(code).then(() => {
@@ -411,7 +402,7 @@ export const OrderHistoryPage: React.FC = () => {
 
                       {/* Download PDF Button with Token Authorization */}
                       <a
-                        href={`/api/orders/${order.id}/pdf${order.accessToken ? `?token=${order.accessToken}` : ''}`}
+                        href={`/api/orders/${order.id}/pdf`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-amber-800 hover:bg-amber-900 text-white text-xs font-bold shadow-xs transition-colors shrink-0"

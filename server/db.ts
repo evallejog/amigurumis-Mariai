@@ -170,6 +170,17 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_analytics_events_name_date ON analytics_events(event_name, occurred_at);
     CREATE INDEX IF NOT EXISTS idx_analytics_events_date ON analytics_events(occurred_at);
     CREATE INDEX IF NOT EXISTS idx_analytics_events_session ON analytics_events(session_id);
+
+    CREATE TABLE IF NOT EXISTS contact_messages (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      message TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'read')),
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_contact_messages_status_created ON contact_messages(status, created_at DESC);
   `);
 
   // Legacy/demo rows are never generated during normal startup.

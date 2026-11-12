@@ -299,3 +299,65 @@ export interface AdminDashboardData {
     data_quality_score: number; // 0 - 100%
   };
 }
+
+// ============================================================================
+// 6. CONTRATOS DE LECTURA — DASHBOARD FASE 3.2
+// ============================================================================
+
+export interface AnalyticsPeriod { start: string; end: string; timezone: 'UTC'; }
+export interface AnalyticsSeriesPoint { date: string; count: number; amount?: number; }
+export interface AnalyticsProductMetric { productId: string; name: string; count: number; amount?: number; }
+export interface AnalyticsAvailability { available: boolean; reason?: string; }
+
+export interface SalesAnalyticsResponse {
+  period: AnalyticsPeriod;
+  kpis: { totalOrders: number; nonCancelledOrders: number; simulatedAmount: number; simulatedAverageTicket: number; };
+  ordersByStatus: { status: string; count: number; }[];
+  timeline: AnalyticsSeriesPoint[];
+  topProducts: AnalyticsProductMetric[];
+}
+
+export interface CustomersAnalyticsResponse {
+  period: AnalyticsPeriod;
+  kpis: { registeredCustomers: number; newRegistrations: number; identifiableBuyers: number; recurringIdentifiableBuyers: number; averageOrdersPerIdentifiableBuyer: number; };
+  registrations: AnalyticsSeriesPoint[];
+  activity: { label: string; buyers: number }[];
+  notes: string[];
+}
+
+export interface BehaviorAnalyticsResponse {
+  period: AnalyticsPeriod;
+  kpis: Record<'productViews' | 'searches' | 'filters' | 'cartAdds' | 'checkoutStarts', number>;
+  eventsByType: { type: string; events: number; uniqueSessions: number }[];
+  timeline: AnalyticsSeriesPoint[];
+  topProducts: AnalyticsProductMetric[];
+  consentNotice: string;
+}
+
+export interface ConversionAnalyticsResponse {
+  period: AnalyticsPeriod;
+  funnel: { stage: string; count: number; source: 'telemetry' | 'orders' }[];
+  sequentialRate: AnalyticsAvailability;
+  coupons: { ordersWithCoupon: number; simulatedDiscount: number; couponsUsed: number; byType: { type: string; count: number }[]; };
+}
+
+export interface GameAnalyticsResponse {
+  period: AnalyticsPeriod;
+  kpis: { technicalSessions: number; victories: number; btlCouponsGenerated: number; btlCouponsUsed: number; simulatedAmountWithBtlCoupons: number; };
+  victoriesByLevel: { level: number; victories: number }[];
+  notes: string[];
+}
+
+// Fase 3.3: contratos de lectura agregada para analítica avanzada.
+export interface AdvancedComparisonMetric { key: string; label: string; current: number; previous: number; absoluteChange: number; percentageChange: number | null; }
+export interface AdvancedComparisonResponse { period: AnalyticsPeriod; previousPeriod: AnalyticsPeriod; metrics: AdvancedComparisonMetric[]; notes: string[]; }
+export interface AdvancedSegmentsResponse { period: AnalyticsPeriod; segments: { code: string; description: string; users: number; percentage: number | null; }[]; rfm: { label: string; users: number; }[]; notes: string[]; }
+export interface AdvancedProductsResponse { period: AnalyticsPeriod; products: { productId: string; name: string; units: number; orders: number; simulatedLineSubtotal: number; unitShare: number | null; amountShare: number | null; previousUnits: number; unitChange: number; }[]; timeline: AnalyticsSeriesPoint[]; notes: string[]; }
+export type AdvancedExportType = 'timeline' | 'products' | 'segments' | 'events';
+
+export type MlDataSource = 'real_commercial' | 'synthetic_academic';
+export interface MlManifest { run_id: string; generated_at: string; data_source: MlDataSource; granularity: string; horizon: number; observations: number; products?: number; pipeline_version: string; training_status: 'completed' | 'skipped'; reason: string | null; sufficiency: 'insufficient' | 'exploratory' | 'evaluable'; methodology_version?: string | null; evaluation_protocol?: string | null; }
+export interface MlQuality { data_source: MlDataSource; observations: number; products: number; period_start: string | null; period_end: string | null; missing_values: number; duplicates: number; negative_quantities: number; invalid_dates: number; sufficiency: MlManifest['sufficiency']; warnings: string[]; }
+export interface MlMetricRow { model: string; mae: number; rmse: number; wape: number | null; bias: number; observations: number; }
+export interface MlEvaluation { data_source: MlDataSource; status: string; evaluation_protocol?: string; strategy?: string; horizon?: number; validation_models?: MlMetricRow[]; test_models?: MlMetricRow[]; models: MlMetricRow[]; selected_model: string | null; test_points: { product_id: string; date_utc: string; actual: number; predicted: number; }[]; warnings: string[]; }
+export interface MlPredictions { data_source: MlDataSource; status: string; predictions: { product_id: string; horizon: number; estimate: number; model: string; }[]; warnings: string[]; }

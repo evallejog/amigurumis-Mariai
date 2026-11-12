@@ -42,7 +42,7 @@ export const CheckoutModal: React.FC = () => {
     setPendingCouponCode,
   } = useCart();
 
-  const { user, token } = useAuth();
+  const { user } = useAuth();
 
   const [step, setStep] = useState<'details' | 'payment' | 'confirmation'>('details');
   const [shippingMethod, setShippingMethod] = useState<ShippingMethod>('standard');
@@ -111,6 +111,12 @@ export const CheckoutModal: React.FC = () => {
   }, [user]);
 
   const [formErrors, setFormErrors] = useState<Partial<Record<keyof CustomerInfo, string>>>({});
+
+  // Must execute on every render. Keeping this above the closed-modal return
+  // preserves the hook order when CartDrawer opens checkout.
+  useEffect(() => {
+    if (isCheckoutOpen) track({ event_id: crypto.randomUUID(), event_type: 'checkout_started', metadata: { item_count: items.length } });
+  }, [isCheckoutOpen, items.length]);
 
   const handleCloseModal = () => {
     setIsCheckoutOpen(false);
@@ -182,9 +188,9 @@ export const CheckoutModal: React.FC = () => {
     try {
       const res = await fetch('/api/coupons/validate', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           code,
@@ -256,9 +262,9 @@ export const CheckoutModal: React.FC = () => {
     try {
       const response = await fetch('/api/orders', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify(payload),
       });
@@ -280,10 +286,6 @@ export const CheckoutModal: React.FC = () => {
       setIsProcessing(false);
     }
   };
-
-  useEffect(() => {
-    if (isCheckoutOpen) track({ event_id: crypto.randomUUID(), event_type: 'checkout_started', metadata: { item_count: items.length } });
-  }, [isCheckoutOpen]);
 
   const handleNotifyWhatsApp = () => {
     if (!confirmedOrder) return;
@@ -872,11 +874,7 @@ Gracias por apoyar el talento y tejido hecho a mano.
             {/* Action Buttons */}
             <div className="flex flex-col sm:flex-row gap-3 pt-2">
               <a
-                href={`/api/orders/${confirmedOrder.id || confirmedOrder.orderId}/pdf${
-                  confirmedOrder.accessToken || confirmedOrder.access_token
-                    ? `?token=${confirmedOrder.accessToken || confirmedOrder.access_token}`
-                    : ''
-                }`}
+                href={`/api/orders/${confirmedOrder.id || confirmedOrder.orderId}/pdf`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex-1 py-3 px-4 rounded-xl bg-amber-800 hover:bg-amber-900 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition-colors"

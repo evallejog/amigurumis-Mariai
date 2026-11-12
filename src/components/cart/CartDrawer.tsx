@@ -222,7 +222,7 @@ export const CartDrawer: React.FC = () => {
 
               <div className="flex items-center justify-center gap-1.5 text-[11px] text-stone-500 pt-1">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Atención artesanal y despachos nacionales asegurados</span>
+                <span>Consulta los detalles de entrega antes de confirmar tu pedido</span>
               </div>
             </div>
           )}
