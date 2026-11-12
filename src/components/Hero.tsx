@@ -76,7 +76,7 @@ export const Hero: React.FC<HeroProps> = ({
             <div className="relative rounded-3xl overflow-hidden liquid-glass-elevated p-3 sm:p-4 border border-white/80 shadow-2xl">
               <div className="relative aspect-4/3 sm:aspect-square rounded-2xl overflow-hidden bg-stone-100">
                 <img
-                  src="/src/assets/images/hero_amigurumi_showcase_1794329731742.jpg"
+                  src="/images/hero_amigurumi_showcase_1794329731742.jpg"
                   alt="Colección artesanal de amigurumis tejidos a mano"
                   className="w-full h-full object-cover transition-transform duration-700 hover:scale-105"
                   referrerPolicy="no-referrer"

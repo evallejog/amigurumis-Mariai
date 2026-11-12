@@ -18,8 +18,8 @@ import {
   testTursoConnection,
   exportDatabaseDump,
   insertAnalyticsEvent,
-} from './server/db.js';
-import { generateOrderPdf, OrderPdfData } from './server/pdfReceipt.js';
+} from './server/db.ts';
+import { generateOrderPdf, type OrderPdfData } from './server/pdfReceipt.ts';
 
 dotenv.config();
 
@@ -69,8 +69,16 @@ function generateRandomCouponCode(): string {
   return `MARIAI-${result}`;
 }
 
-function sessionCookieOptions() {
-  return { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' as const, maxAge: 30 * 24 * 60 * 60 * 1000, path: '/' };
+function sessionCookieOptions(req?: express.Request) {
+  const forwardedProto = req?.get('x-forwarded-proto')?.split(',')[0].trim();
+  const isHttps = Boolean(req?.secure || forwardedProto === 'https' || process.env.NODE_ENV === 'production');
+  return {
+    httpOnly: true,
+    secure: isHttps,
+    sameSite: (isHttps ? 'none' : 'lax') as 'none' | 'lax',
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+    path: '/',
+  };
 }
 
 async function startServer() {
@@ -272,8 +280,8 @@ async function startServer() {
 
       console.log(`[AUTH] Usuario registrado exitosamente en DB: ${userId} (${normalizedEmail})`);
 
-      // Set session cookie (partitioned for iframe support)
-      res.cookie('amigurumis_mariai_session', token, sessionCookieOptions());
+      // Set session cookie (partitioned/cross-site compatible for HTTPS iframe support)
+      res.cookie('amigurumis_mariai_session', token, sessionCookieOptions(req));
 
       return res.status(201).json({
         user: {
@@ -321,7 +329,7 @@ async function startServer() {
       `).run(token, user.id, new Date().toISOString(), expiresAt);
 
       // Set secure HTTP-only session cookie
-      res.cookie('amigurumis_mariai_session', token, sessionCookieOptions());
+      res.cookie('amigurumis_mariai_session', token, sessionCookieOptions(req));
 
       return res.json({
         user: {
@@ -436,7 +444,7 @@ async function startServer() {
       }
     }
 
-    res.clearCookie('amigurumis_mariai_session', sessionCookieOptions());
+    res.clearCookie('amigurumis_mariai_session', sessionCookieOptions(req));
 
     return res.json({ success: true, message: 'Sesión cerrada correctamente.' });
   });
@@ -2649,7 +2657,7 @@ async function startServer() {
         (colors || '').trim(),
         (careInstructions || 'Lavar a mano con agua fría y secar a la sombra.').trim(),
         (notes || '').trim(),
-        imageUrl || '/src/assets/images/hero_amigurumi_showcase_1794329731742.jpg',
+        imageUrl || '/images/hero_amigurumi_showcase_1794329731742.jpg',
         additionalImagesJson,
         tagsJson,
         featured ? 1 : 0,
@@ -2969,6 +2977,7 @@ async function startServer() {
       }
     });
   } else {
+    app.use('/src/assets/images', express.static(path.resolve(__dirname, 'public', 'images')));
     app.use(express.static(path.resolve(__dirname, 'dist')));
     app.get('*', (req, res) => {
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));

@@ -343,7 +343,7 @@ export function initDatabase() {
       'Osito Silvestre con Bufanda Mostaza',
       18500,
       1,
-      '/src/assets/images/product_crochet_bear_1794329732428.jpg'
+      '/images/product_crochet_bear_1794329732428.jpg'
     );
 
     db.prepare(`
@@ -356,7 +356,7 @@ export function initDatabase() {
       'Ballenita Marina Suave',
       12500,
       1,
-      '/src/assets/images/product_crochet_whale_1794329732780.jpg'
+      '/images/product_crochet_whale_1794329732780.jpg'
     );
   }
 
@@ -378,8 +378,8 @@ export function initDatabase() {
     } catch {}
   }
 
-  // Catalog demo fixtures are also opt-in; existing catalog data is preserved.
-  if (process.env.SEED_DEMO_DATA === 'true') {
+  // Seed initial catalog when empty unless explicitly disabled (e.g. isolated test suites).
+  if (process.env.SEED_DEMO_DATA !== 'false' && process.env.NODE_ENV !== 'test') {
   // Seed default handcrafted amigurumis catalog if empty
   try {
     const countProducts = (db.prepare('SELECT count(*) as count FROM products').get() as any)?.count || 0;
@@ -420,7 +420,7 @@ export function initDatabase() {
           colors: 'Marrón tostado, mostaza, marfil',
           careInstructions: 'Lavar a mano con agua fría y jabón neutro. Secar horizontal a la sombra.',
           notes: 'Incluye bufanda desmontable.',
-          imageUrl: '/src/assets/images/product_crochet_bear_1794329732428.jpg',
+          imageUrl: '/images/product_crochet_bear_1794329732428.jpg',
           additionalImages: [],
           tags: ['Clásico', 'Bebés', 'Regalo', 'Bufanda tejida'],
           featured: 1,
@@ -446,7 +446,7 @@ export function initDatabase() {
           colors: 'Celeste pastel, crudo',
           careInstructions: 'Lavado suave a mano.',
           notes: '',
-          imageUrl: '/src/assets/images/product_crochet_whale_1794329732780.jpg',
+          imageUrl: '/images/product_crochet_whale_1794329732780.jpg',
           additionalImages: [],
           tags: ['Marino', 'Compacto', 'Suave', 'Acuático'],
           featured: 1,
@@ -472,7 +472,7 @@ export function initDatabase() {
           colors: 'Esmeralda, lavanda pastel, perla',
           careInstructions: 'Limpieza en seco o paño ligeramente húmedo.',
           notes: 'Edición para coleccionistas.',
-          imageUrl: '/src/assets/images/product_crochet_dragon_1794329733851.jpg',
+          imageUrl: '/images/product_crochet_dragon_1794329733851.jpg',
           additionalImages: [],
           tags: ['Fantasía', 'Pieza de colección', 'Por encargo'],
           featured: 1,
@@ -498,7 +498,7 @@ export function initDatabase() {
           colors: 'Blanco perla, lavanda, dorado espacial',
           careInstructions: 'No sumergir en agua. Limpiar con toalla suave.',
           notes: 'Pieza numerada de autor.',
-          imageUrl: '/src/assets/images/ai_amigurumi_sample_1794329733805.jpg',
+          imageUrl: '/images/ai_amigurumi_sample_1794329733805.jpg',
           additionalImages: [],
           tags: ['Edición Especial', 'Astronauta', 'Pieza de Autor'],
           featured: 1,
@@ -524,7 +524,7 @@ export function initDatabase() {
           colors: 'Rojo terracota, crema, carbón',
           careInstructions: 'Peinar la cola con cepillo de cerdas suaves. Lavado a mano.',
           notes: 'Modelo canónico de taller.',
-          imageUrl: '/src/assets/images/product_crochet_bear_1794329732428.jpg',
+          imageUrl: '/images/product_crochet_bear_1794329732428.jpg',
           additionalImages: [],
           tags: ['Bosque', 'Otoño', 'Decoración infantil'],
           featured: 0,
@@ -550,7 +550,7 @@ export function initDatabase() {
           colors: 'Verde menta, verde bosque, terracota maceta',
           careInstructions: 'Retirar polvo con secador de aire frío.',
           notes: '',
-          imageUrl: '/src/assets/images/hero_amigurumi_showcase_1794329731742.jpg',
+          imageUrl: '/images/hero_amigurumi_showcase_1794329731742.jpg',
           additionalImages: [],
           tags: ['Botánica', 'Escritorio', 'Bajo mantenimiento'],
           featured: 0,
@@ -576,7 +576,7 @@ export function initDatabase() {
           colors: 'Beige arena, lila vestido',
           careInstructions: 'Prenda lavable por separado.',
           notes: 'Incluye vestido desmontable.',
-          imageUrl: '/src/assets/images/hero_amigurumi_showcase_1794329731742.jpg',
+          imageUrl: '/images/hero_amigurumi_showcase_1794329731742.jpg',
           additionalImages: [],
           tags: ['Vestuario removible', 'Colección', 'Regalo delicado'],
           featured: 0,
@@ -602,7 +602,7 @@ export function initDatabase() {
           colors: 'Verde oliva, flores fucsia, maceta óxido',
           careInstructions: 'Sin riego, mantener en interiores.',
           notes: '',
-          imageUrl: '/src/assets/images/product_crochet_dragon_1794329733851.jpg',
+          imageUrl: '/images/product_crochet_dragon_1794329733851.jpg',
           additionalImages: [],
           tags: ['Botánica', 'Decoración', 'Sin espinas'],
           featured: 0,
@@ -647,6 +647,13 @@ export function initDatabase() {
   }
 
   }
+
+  // Migrate legacy /src/assets/images/ paths to public /images/ so deployed bundles resolve every product image
+  try {
+    db.prepare("UPDATE products SET image_url = REPLACE(image_url, '/src/assets/images/', '/images/') WHERE image_url LIKE '/src/assets/images/%'").run();
+    db.prepare("UPDATE order_items SET image_url = REPLACE(image_url, '/src/assets/images/', '/images/') WHERE image_url LIKE '/src/assets/images/%'").run();
+  } catch {}
+
   console.log('SQLite database initialized successfully at:', dbPath);
 }
 

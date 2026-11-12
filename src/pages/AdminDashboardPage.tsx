@@ -299,7 +299,7 @@ export const AdminDashboardPage: React.FC = () => {
     colors: 'Tostado, marfil',
     careInstructions: 'Lavar a mano con agua fría y secar horizontal a la sombra.',
     notes: '',
-    imageUrl: '/src/assets/images/hero_amigurumi_showcase_1794329731742.jpg',
+    imageUrl: '/images/hero_amigurumi_showcase_1794329731742.jpg',
     featured: false,
   });
 
@@ -381,7 +381,7 @@ export const AdminDashboardPage: React.FC = () => {
       colors: '',
       careInstructions: 'Lavar a mano con agua fría y secar horizontal a la sombra.',
       notes: '',
-      imageUrl: '/src/assets/images/hero_amigurumi_showcase_1794329731742.jpg',
+      imageUrl: '/images/hero_amigurumi_showcase_1794329731742.jpg',
       featured: false,
     });
     setProductModalError(null);
@@ -1700,7 +1700,7 @@ export const AdminDashboardPage: React.FC = () => {
                               <div className="flex items-center gap-3">
                                 <div className="w-12 h-12 rounded-xl overflow-hidden bg-stone-100 border border-stone-200/70 shrink-0">
                                   <img
-                                    src={prod.imageUrl || '/src/assets/images/hero_amigurumi_showcase_1794329731742.jpg'}
+                                    src={prod.imageUrl || '/images/hero_amigurumi_showcase_1794329731742.jpg'}
                                     alt={prod.name}
                                     className="w-full h-full object-cover"
                                     onError={(e) => {
@@ -1878,7 +1878,7 @@ export const AdminDashboardPage: React.FC = () => {
                       <div className="flex items-start gap-3">
                         <div className="w-14 h-14 rounded-xl overflow-hidden bg-stone-100 border border-stone-200 shrink-0">
                           <img
-                            src={prod.imageUrl || '/src/assets/images/hero_amigurumi_showcase_1794329731742.jpg'}
+                            src={prod.imageUrl || '/images/hero_amigurumi_showcase_1794329731742.jpg'}
                             alt={prod.name}
                             className="w-full h-full object-cover"
                             onError={(e) => {
@@ -3564,7 +3564,7 @@ export const AdminDashboardPage: React.FC = () => {
                           type="text"
                           value={productForm.imageUrl}
                           onChange={(e) => setProductForm({ ...productForm, imageUrl: e.target.value })}
-                          placeholder="/uploads/... o /src/assets/images/..."
+                          placeholder="/uploads/... o /images/..."
                           className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-xs font-mono text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
                         />
                       </div>
@@ -3638,7 +3638,7 @@ export const AdminDashboardPage: React.FC = () => {
               <div className="flex flex-col sm:flex-row gap-4 p-4 rounded-2xl bg-amber-50/60 border border-amber-200/70 items-center sm:items-start">
                 <div className="w-24 h-24 rounded-xl overflow-hidden bg-white border border-amber-200 shrink-0 shadow-xs">
                   <img
-                    src={detailProduct.imageUrl || '/src/assets/images/hero_amigurumi_showcase_1794329731742.jpg'}
+                    src={detailProduct.imageUrl || '/images/hero_amigurumi_showcase_1794329731742.jpg'}
                     alt={detailProduct.name}
                     className="w-full h-full object-cover"
                   />

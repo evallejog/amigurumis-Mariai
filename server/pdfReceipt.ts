@@ -1,5 +1,5 @@
 import PDFDocument from 'pdfkit';
-import { Response } from 'express';
+import type { Response } from 'express';
 
 export interface OrderPdfData {
   orderNumber: string;
