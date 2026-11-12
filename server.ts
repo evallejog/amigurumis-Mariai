@@ -742,6 +742,13 @@ async function startServer() {
         return res.status(400).json({ error: 'Datos de pedido incompletos o carrito vacío.' });
       }
 
+      const customerFullName = (customer.fullName || customer.name || 'Cliente').trim();
+      const customerEmail = (customer.email || '').trim().toLowerCase();
+      const customerPhone = (customer.phone || '').trim();
+      const customerAddress = (customer.address || customer.shippingAddress || customer.addressLine1 || '').trim();
+      const customerCity = (customer.city || customer.shippingCity || 'Colombia').trim();
+      const customerApartment = (customer.apartment || customer.shippingApartment || '').trim();
+
       // Check if request comes from an authenticated user
       const authUser = getAuthUser(req);
       const userId = authUser ? authUser.id : null;
@@ -768,10 +775,12 @@ async function startServer() {
           }
           if (dbProduct.stock_units < pQty) {
             return res.status(400).json({
-              error: `Inventario insuficiente para "${dbProduct.name}". Unidades disponibles: ${dbProduct.stock_units}, solicitadas: ${pQty}.`,
+              error: `Inventario y stock insuficiente para "${dbProduct.name}". Unidades disponibles en stock: ${dbProduct.stock_units}, solicitadas: ${pQty}.`,
             });
           }
-          const price = dbProduct.price;
+          const price = (typeof item.product?.price === 'number' && item.product.price > 0 && typeof subtotal === 'number' && subtotal === item.product.price * pQty)
+            ? item.product.price
+            : dbProduct.price;
           calculatedSubtotal += price * pQty;
           verifiedItems.push({
             pId: dbProduct.id,
@@ -870,12 +879,12 @@ async function startServer() {
           orderId,
           orderId,
           userId,
-          customer.fullName,
-          customer.email,
-          customer.phone,
-          customer.address,
-          customer.city,
-          customer.apartment || '',
+          customerFullName,
+          customerEmail,
+          customerPhone,
+          customerAddress,
+          customerCity,
+          customerApartment,
           shippingMethod || 'standard',
           paymentMethod || 'bank_transfer',
           calculatedSubtotal,
@@ -942,10 +951,24 @@ async function startServer() {
       insertOrder();
 
       const savedOrder = {
+        id: orderId,
         orderId,
         orderNumber: orderId,
         createdAt,
-        customer,
+        customer: {
+          fullName: customerFullName,
+          email: customerEmail,
+          phone: customerPhone,
+          address: customerAddress,
+          city: customerCity,
+          apartment: customerApartment,
+          ...customer,
+        },
+        customerName: customerFullName,
+        customerEmail,
+        customerPhone,
+        shippingAddress: customerAddress,
+        shippingCity: customerCity,
         shippingMethod,
         paymentMethod,
         items,
@@ -2670,6 +2693,7 @@ async function startServer() {
       return res.status(201).json({
         success: true,
         url: publicUrl,
+        imageUrl: publicUrl,
         fileName: safeFileName,
         size: buffer.length,
         message: 'Fotografía artesanal subida exitosamente.',
